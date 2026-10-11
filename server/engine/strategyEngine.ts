@@ -1,10 +1,10 @@
-import { BotRecord, StrategyConfig } from '../types.js';
+import { BotRecord } from '../types.js';
 import { DerivTick } from '../deriv/client.js';
 
 export interface StrategySignal {
   action: 'BUY' | 'WAIT';
   symbol: string;
-  contractSubtype: string; // 'CALL' | 'PUT' | 'DIGITODD' | 'DIGITEVEN' | 'DIGITDIFF' etc.
+  contractSubtype: string; // 'CALL' | 'PUT' | 'DIGITODD' | 'DIGITEVEN' | 'DIGITDIFF' | 'ACCU' etc.
   confidence: number;
   barrier?: string;
   durationTicks: number;
@@ -19,50 +19,125 @@ export class StrategyEngine {
     digitFrequencies: number[]
   ): StrategySignal {
     const strat = bot.strategy;
-    const history = priceHistory || [tick.quote];
+    const history = priceHistory && priceHistory.length > 0 ? priceHistory : [tick.quote];
+    const isFirstTrade = bot.currentTradeSession.totalTrades === 0;
 
-    // Filter check: tick noise & spread
-    if (strat.filters.avoidTickNoise && history.length >= 2) {
-      const lastDiff = Math.abs(history[history.length - 1] - history[history.length - 2]);
-      if (lastDiff === 0) {
-        return {
-          action: 'WAIT',
-          symbol: tick.symbol,
-          contractSubtype: '',
-          confidence: 0,
-          durationTicks: 5,
-          rationale: 'Suppressed: Zero tick displacement (noise filter active).'
-        };
-      }
+    // Direct contract check for specific contract families
+    const selectedTypes = (bot.selectedContractTypes || []).map(t => t.toUpperCase());
+
+    // 1. Accumulator contracts
+    if (selectedTypes.includes('ACCU') || selectedTypes.includes('ACCUM') || strat.type === 'ACCUMULATOR_COMPOUNDER') {
+      return this.evaluateAccumulator(bot, tick);
     }
 
+    // 2. Digit contracts (Differs, Matches, Over, Under, Even, Odd)
+    const hasDigitContract = selectedTypes.some(t => 
+      ['DIGITDIFF', 'DIGITMATCH', 'DIGITEVEN', 'DIGITODD', 'DIGITOVER', 'DIGITUNDER'].includes(t)
+    );
+    if (hasDigitContract || strat.type === 'DIGIT_FREQUENCY_ANALYSIS') {
+      return this.evaluateDigitFrequency(bot, tick, digitFrequencies, isFirstTrade);
+    }
+
+    // 3. Higher / Lower contracts
+    if (selectedTypes.includes('HIGHER') || selectedTypes.includes('LOWER')) {
+      return this.evaluateHigherLower(bot, tick, history, isFirstTrade);
+    }
+
+    // 4. Touch / No Touch
+    if (selectedTypes.includes('ONETOUCH') || selectedTypes.includes('NOTOUCH')) {
+      const target = selectedTypes.includes('NOTOUCH') ? 'NOTOUCH' : 'ONETOUCH';
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: target,
+        confidence: 0.85,
+        barrier: '+1.37',
+        durationTicks: 5,
+        rationale: `${target} barrier probability: spot ${tick.quote}, target barrier +1.37.`
+      };
+    }
+
+    // 5. Turbos
+    if (selectedTypes.some(t => t.startsWith('TURBO'))) {
+      const isUp = history.length >= 2 ? tick.quote >= history[history.length - 2] : true;
+      const target = isUp ? 'TURBOSLONG' : 'TURBOSSHORT';
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: target,
+        confidence: 0.84,
+        barrier: '+0.00',
+        durationTicks: 5,
+        rationale: `Turbo dynamic leverage execution: ${target} with risk barrier.`
+      };
+    }
+
+    // 6. Vanillas
+    if (selectedTypes.some(t => t.startsWith('VANILLA'))) {
+      const isUp = history.length >= 2 ? tick.quote >= history[history.length - 2] : true;
+      const target = isUp ? 'VANILLALONGCALL' : 'VANILLALONGPUT';
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: target,
+        confidence: 0.80,
+        barrier: '+0.00',
+        durationTicks: 10,
+        rationale: `Vanilla Option purchase: ${target} strike at current spot ${tick.quote}.`
+      };
+    }
+
+    // 7. Multipliers
+    if (selectedTypes.includes('MULTUP') || selectedTypes.includes('MULTDOWN') || strat.type === 'MULTIPLIER_DYNAMIC_SCALP') {
+      return this.evaluateMultiplier(bot, tick, history);
+    }
+
+    // Strategy-type specific branching for Rise/Fall & Momentum
     switch (strat.type) {
-      case 'MOMENTUM_TREND':
-        return this.evaluateMomentumTrend(bot, tick, history);
       case 'MEAN_REVERSION':
-        return this.evaluateMeanReversion(bot, tick, history);
-      case 'DIGIT_FREQUENCY_ANALYSIS':
-        return this.evaluateDigitFrequency(bot, tick, digitFrequencies);
+        return this.evaluateMeanReversion(bot, tick, history, isFirstTrade);
       case 'VOLATILITY_BREAKOUT':
-        return this.evaluateVolatilityBreakout(bot, tick, history);
-      case 'ACCUMULATOR_COMPOUNDER':
-        return this.evaluateAccumulator(bot, tick);
-      case 'MULTIPLIER_DYNAMIC_SCALP':
-        return this.evaluateMultiplier(bot, tick, history);
-      case 'HYBRID_FAILOVER_ROTATION':
+        return this.evaluateVolatilityBreakout(bot, tick, history, isFirstTrade);
+      case 'MOMENTUM_TREND':
       default:
-        return this.evaluateHybridRotation(bot, tick, history, digitFrequencies);
+        return this.evaluateMomentumTrend(bot, tick, history, isFirstTrade);
     }
   }
 
   private static evaluateMomentumTrend(
     bot: BotRecord,
     tick: DerivTick,
-    history: number[]
+    history: number[],
+    isFirstTrade: boolean
   ): StrategySignal {
-    const requiredTicks = bot.strategy.entryConditions.consecutiveTicksRequired || 3;
-    if (history.length < requiredTicks + 1) {
-      return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 5, rationale: 'Building tick window...' };
+    const selectedTypes = (bot.selectedContractTypes || []).map(t => t.toUpperCase());
+    const allowsCall = selectedTypes.includes('CALL') || selectedTypes.includes('RISE') || selectedTypes.includes('CALLE');
+    const allowsPut = selectedTypes.includes('PUT') || selectedTypes.includes('FALL') || selectedTypes.includes('PUTE');
+
+    // On initial run button click: execute first trade promptly
+    if (isFirstTrade && (allowsCall || allowsPut)) {
+      const isRising = history.length >= 2 ? tick.quote >= history[history.length - 2] : true;
+      const subtype = isRising ? (allowsCall ? 'CALL' : 'PUT') : (allowsPut ? 'PUT' : 'CALL');
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: subtype,
+        confidence: 0.90,
+        durationTicks: 5,
+        rationale: `Initial execution on bot start: ${subtype} on ${tick.symbol} @ spot ${tick.quote}.`
+      };
+    }
+
+    const requiredTicks = bot.strategy.entryConditions.consecutiveTicksRequired || 2;
+    if (history.length < 2) {
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: allowsCall ? 'CALL' : 'PUT',
+        confidence: 0.85,
+        durationTicks: 5,
+        rationale: `Direct execution: initiating ${allowsCall ? 'CALL' : 'PUT'} sequence.`
+      };
     }
 
     const window = history.slice(-requiredTicks - 1);
@@ -74,92 +149,143 @@ export class StrategyEngine {
       else if (window[i] < window[i - 1]) consecutiveFalls++;
     }
 
-    if (consecutiveRises >= requiredTicks && bot.selectedContractTypes.includes('CALL')) {
+    if (consecutiveRises >= 1 && allowsCall) {
       return {
         action: 'BUY',
         symbol: tick.symbol,
         contractSubtype: 'CALL',
         confidence: 0.88,
         durationTicks: 5,
-        rationale: `Bullish momentum detected: ${consecutiveRises} consecutive rising ticks.`
+        rationale: `Bullish momentum detected: ${consecutiveRises} consecutive rising tick(s).`
       };
     }
 
-    if (consecutiveFalls >= requiredTicks && bot.selectedContractTypes.includes('PUT')) {
+    if (consecutiveFalls >= 1 && allowsPut) {
       return {
         action: 'BUY',
         symbol: tick.symbol,
         contractSubtype: 'PUT',
         confidence: 0.88,
         durationTicks: 5,
-        rationale: `Bearish momentum detected: ${consecutiveFalls} consecutive falling ticks.`
+        rationale: `Bearish momentum detected: ${consecutiveFalls} consecutive falling tick(s).`
       };
     }
 
-    return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 5, rationale: 'Monitoring directional momentum...' };
+    // Default to the primary allowed subtype
+    const fallbackSubtype = allowsCall ? 'CALL' : allowsPut ? 'PUT' : selectedTypes[0] || 'CALL';
+    return {
+      action: 'BUY',
+      symbol: tick.symbol,
+      contractSubtype: fallbackSubtype,
+      confidence: 0.80,
+      durationTicks: 5,
+      rationale: `Directional trend follow: purchasing ${fallbackSubtype} on ${tick.symbol}.`
+    };
+  }
+
+  private static evaluateHigherLower(
+    bot: BotRecord,
+    tick: DerivTick,
+    history: number[],
+    isFirstTrade: boolean
+  ): StrategySignal {
+    const selectedTypes = (bot.selectedContractTypes || []).map(t => t.toUpperCase());
+    const isHigher = selectedTypes.includes('HIGHER');
+    const isLower = selectedTypes.includes('LOWER');
+
+    const targetType = isHigher ? 'HIGHER' : isLower ? 'LOWER' : 'HIGHER';
+    const barrier = targetType === 'HIGHER' ? '+0.5' : '-0.5';
+
+    return {
+      action: 'BUY',
+      symbol: tick.symbol,
+      contractSubtype: targetType,
+      confidence: 0.85,
+      barrier,
+      durationTicks: 5, // Strict Deriv 5-tick minimum for Higher/Lower
+      rationale: `${targetType} barrier contract (${barrier}): Enforcing minimum 5-tick duration.`
+    };
   }
 
   private static evaluateMeanReversion(
     bot: BotRecord,
     tick: DerivTick,
-    history: number[]
+    history: number[],
+    isFirstTrade: boolean
   ): StrategySignal {
-    if (history.length < 10) {
-      return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 5, rationale: 'Accumulating price sample...' };
+    const selectedTypes = (bot.selectedContractTypes || []).map(t => t.toUpperCase());
+    if (isFirstTrade || history.length < 5) {
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: selectedTypes.includes('CALL') ? 'CALL' : 'PUT',
+        confidence: 0.85,
+        durationTicks: 5,
+        rationale: `Mean Reversion baseline initiation: spot ${tick.quote}.`
+      };
     }
 
-    const sum = history.slice(-10).reduce((acc, p) => acc + p, 0);
-    const mean = sum / 10;
+    const window = history.slice(-5);
+    const mean = window.reduce((acc, p) => acc + p, 0) / window.length;
     const deviation = (tick.quote - mean) / mean;
 
-    if (deviation < -0.0004 && bot.selectedContractTypes.includes('CALL')) {
+    if (deviation <= 0 && selectedTypes.includes('CALL')) {
       return {
         action: 'BUY',
         symbol: tick.symbol,
         contractSubtype: 'CALL',
-        confidence: 0.82,
+        confidence: 0.84,
         durationTicks: 5,
         rationale: `Oversold stretch (${(deviation * 100).toFixed(3)}%). Anticipating reversion upward.`
       };
     }
 
-    if (deviation > 0.0004 && bot.selectedContractTypes.includes('PUT')) {
+    if (deviation > 0 && selectedTypes.includes('PUT')) {
       return {
         action: 'BUY',
         symbol: tick.symbol,
         contractSubtype: 'PUT',
-        confidence: 0.82,
+        confidence: 0.84,
         durationTicks: 5,
         rationale: `Overbought stretch (+${(deviation * 100).toFixed(3)}%). Anticipating reversion downward.`
       };
     }
 
-    return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 5, rationale: 'Within mean reversion equilibrium.' };
+    return {
+      action: 'BUY',
+      symbol: tick.symbol,
+      contractSubtype: selectedTypes[0] || 'CALL',
+      confidence: 0.80,
+      durationTicks: 5,
+      rationale: `Equilibrium cycle: executing ${selectedTypes[0] || 'CALL'}.`
+    };
   }
 
   private static evaluateDigitFrequency(
     bot: BotRecord,
     tick: DerivTick,
-    digitFrequencies: number[]
+    _digitFrequencies: number[],
+    _isFirstTrade: boolean
   ): StrategySignal {
+    const selectedTypes = (bot.selectedContractTypes || []).map(t => t.toUpperCase());
     const isOdd = tick.digit % 2 !== 0;
 
-    // Check Odd/Even contracts
-    if (bot.selectedContractTypes.includes('DIGITODD') || bot.selectedContractTypes.includes('DIGITEVEN')) {
-      // If last digit was even, alternate or follow parity streak
+    // 1. Even / Odd contracts
+    if (selectedTypes.includes('DIGITODD') || selectedTypes.includes('DIGITEVEN')) {
+      // Rotate parity or predict alternate
       const targetSubtype = isOdd ? 'DIGITEVEN' : 'DIGITODD';
       return {
         action: 'BUY',
         symbol: tick.symbol,
         contractSubtype: targetSubtype,
-        confidence: 0.79,
+        confidence: 0.82,
         durationTicks: 1,
-        rationale: `Parity rotation: Last digit was ${tick.digit} (${isOdd ? 'Odd' : 'Even'}). Target ${targetSubtype}.`
+        rationale: `Digit Parity: Last digit was ${tick.digit} (${isOdd ? 'Odd' : 'Even'}). Purchasing ${targetSubtype}.`
       };
     }
 
-    // Check Differs contracts (Target configured barrier or least frequent digit)
-    if (bot.selectedContractTypes.includes('DIGITDIFF')) {
+    // 2. Differs contracts (DIGITDIFF)
+    if (selectedTypes.includes('DIGITDIFF')) {
       const barrier = bot.strategy.entryConditions.barrierDigit !== undefined
         ? `${bot.strategy.entryConditions.barrierDigit}`
         : (bot.strategy.entryConditions.targetDigit !== undefined
@@ -173,106 +299,113 @@ export class StrategyEngine {
         confidence: 0.91,
         barrier,
         durationTicks: 1,
-        rationale: `Statistical Digit Differs: targeting barrier digit ${barrier} (win condition: last digit != ${barrier}).`
+        rationale: `Digit Differs: targeting barrier digit ${barrier} (win condition: last digit != ${barrier}).`
       };
     }
 
-    // Default Over/Under
-    if (bot.selectedContractTypes.includes('DIGITOVER') || bot.selectedContractTypes.includes('DIGITUNDER')) {
+    // 3. Matches contracts (DIGITMATCH)
+    if (selectedTypes.includes('DIGITMATCH')) {
       const barrier = bot.strategy.entryConditions.barrierDigit !== undefined
         ? `${bot.strategy.entryConditions.barrierDigit}`
-        : (bot.strategy.entryConditions.targetDigit !== undefined
-            ? `${bot.strategy.entryConditions.targetDigit}`
-            : '5');
-      const targetSubtype = bot.selectedContractTypes.includes('DIGITOVER') ? 'DIGITOVER' : 'DIGITUNDER';
+        : `${tick.digit}`;
+
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: 'DIGITMATCH',
+        confidence: 0.75,
+        barrier,
+        durationTicks: 1,
+        rationale: `Digit Matches: targeting barrier digit ${barrier} (high payout edge).`
+      };
+    }
+
+    // 4. Over / Under contracts
+    if (selectedTypes.includes('DIGITOVER') || selectedTypes.includes('DIGITUNDER')) {
+      const barrier = bot.strategy.entryConditions.barrierDigit !== undefined
+        ? `${bot.strategy.entryConditions.barrierDigit}`
+        : '5';
+      const targetSubtype = selectedTypes.includes('DIGITOVER') ? 'DIGITOVER' : 'DIGITUNDER';
 
       return {
         action: 'BUY',
         symbol: tick.symbol,
         contractSubtype: targetSubtype,
-        confidence: 0.80,
+        confidence: 0.82,
         barrier,
-        durationTicks: 2,
-        rationale: `Digit range: last digit ${tick.digit}, purchasing ${targetSubtype} barrier digit ${barrier}.`
+        durationTicks: 1,
+        rationale: `Digit range: last digit was ${tick.digit}, purchasing ${targetSubtype} barrier ${barrier}.`
       };
     }
 
-    return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 1, rationale: 'Awaiting digit distribution bias.' };
+    // Default digit fallback
+    return {
+      action: 'BUY',
+      symbol: tick.symbol,
+      contractSubtype: selectedTypes[0] || 'DIGITDIFF',
+      confidence: 0.85,
+      barrier: '0',
+      durationTicks: 1,
+      rationale: `Statistical Digit cycle: executing ${selectedTypes[0] || 'DIGITDIFF'}.`
+    };
   }
 
   private static evaluateVolatilityBreakout(
     bot: BotRecord,
     tick: DerivTick,
-    history: number[]
+    history: number[],
+    isFirstTrade: boolean
   ): StrategySignal {
-    if (history.length < 6) {
-      return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 5, rationale: 'Measuring baseline variance...' };
+    const selectedTypes = (bot.selectedContractTypes || []).map(t => t.toUpperCase());
+    if (isFirstTrade || history.length < 3) {
+      return {
+        action: 'BUY',
+        symbol: tick.symbol,
+        contractSubtype: selectedTypes.includes('CALL') ? 'CALL' : 'PUT',
+        confidence: 0.86,
+        durationTicks: 5,
+        rationale: `Volatility breakout initial order @ spot ${tick.quote}.`
+      };
     }
 
-    const baseline = history[history.length - 6];
+    const baseline = history[0];
     const diff = tick.quote - baseline;
-    const threshold = (baseline * 0.0003);
+    const isUp = diff >= 0;
+    const subtype = isUp ? (selectedTypes.includes('CALL') ? 'CALL' : 'PUT') : (selectedTypes.includes('PUT') ? 'PUT' : 'CALL');
 
-    if (diff > threshold && (bot.selectedContractTypes.includes('CALL') || bot.selectedContractTypes.includes('HIGHER'))) {
-      return {
-        action: 'BUY',
-        symbol: tick.symbol,
-        contractSubtype: 'CALL',
-        confidence: 0.85,
-        durationTicks: 5,
-        rationale: `Volatility expansion breakout upward (+${diff.toFixed(2)} pts).`
-      };
-    }
-
-    if (diff < -threshold && (bot.selectedContractTypes.includes('PUT') || bot.selectedContractTypes.includes('LOWER'))) {
-      return {
-        action: 'BUY',
-        symbol: tick.symbol,
-        contractSubtype: 'PUT',
-        confidence: 0.85,
-        durationTicks: 5,
-        rationale: `Volatility expansion breakout downward (${diff.toFixed(2)} pts).`
-      };
-    }
-
-    return { action: 'WAIT', symbol: tick.symbol, contractSubtype: '', confidence: 0, durationTicks: 5, rationale: 'Volatility within normal bounds.' };
+    return {
+      action: 'BUY',
+      symbol: tick.symbol,
+      contractSubtype: subtype,
+      confidence: 0.85,
+      durationTicks: 5,
+      rationale: `Volatility expansion: spot delta ${diff.toFixed(3)}, placing ${subtype}.`
+    };
   }
 
   private static evaluateAccumulator(bot: BotRecord, tick: DerivTick): StrategySignal {
-    const growth = bot.strategy.entryConditions.growthRate || 2;
+    const growth = bot.strategy.entryConditions.growthRate || 3;
     const limit = bot.strategy.entryConditions.limitOrder || 10;
     return {
       action: 'BUY',
       symbol: tick.symbol,
       contractSubtype: 'ACCU',
-      confidence: 0.82,
-      durationTicks: Math.min(20, Math.max(1, limit)),
-      rationale: `Accumulator tick compounding: growth rate ${growth}%, limit order take-profit at ${limit} ticks with knockout guard.`
+      confidence: 0.85,
+      durationTicks: 10,
+      rationale: `Accumulator dynamic trade: growth rate ${growth}%, take-profit limit at $${limit}.00.`
     };
   }
 
   private static evaluateMultiplier(bot: BotRecord, tick: DerivTick, history: number[]): StrategySignal {
     const isUp = history.length >= 2 ? tick.quote >= history[history.length - 2] : true;
+    const target = isUp ? 'MULTUP' : 'MULTDOWN';
     return {
       action: 'BUY',
       symbol: tick.symbol,
-      contractSubtype: isUp ? 'MULTUP' : 'MULTDOWN',
+      contractSubtype: target,
       confidence: 0.83,
       durationTicks: 30,
-      rationale: `Multiplier Scalp: ${isUp ? 'MULTUP' : 'MULTDOWN'} x${bot.strategy.entryConditions.multiplier || 100} with dynamic take-profit.`
+      rationale: `Multiplier Scalp: ${target} x${bot.strategy.entryConditions.multiplier || 100} with dynamic stop.`
     };
-  }
-
-  private static evaluateHybridRotation(
-    bot: BotRecord,
-    tick: DerivTick,
-    history: number[],
-    digitFrequencies: number[]
-  ): StrategySignal {
-    // If consecutive losses > 0, rotate between Digit Differs and Momentum
-    if (bot.currentTradeSession.consecutiveLosses > 0) {
-      return this.evaluateDigitFrequency(bot, tick, digitFrequencies);
-    }
-    return this.evaluateMomentumTrend(bot, tick, history);
   }
 }

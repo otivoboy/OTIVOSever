@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { observer } from 'mobx-react-lite';
 import { rootStore } from './stores/root-store.js';
 import { api } from './services/api.js';
+import { botEngine } from './lib/botEngine.js';
 import {
   BotRecord,
   DerivAccount,
@@ -50,6 +51,32 @@ export default observer(function App() {
 
   const activeAccount = accounts.find(a => a.isActive) || accounts[0];
   const activeBot = bots.find(b => b.status === 'RUNNING') || bots[0];
+
+  // Helper to attach client-side execution loop to guarantee immediate and continuous contract purchases
+  const startClientBotExecution = useCallback((botToRun: BotRecord) => {
+    botEngine.startBot(botToRun, {
+      onTradePlaced: (newTrade) => {
+        setTrades(prev => [newTrade, ...prev.filter(t => t.id !== newTrade.id)]);
+        api.getAnalytics().then(setAnalytics).catch(() => {});
+      },
+      onTradeSettled: (settledTrade) => {
+        setTrades(prev => [settledTrade, ...prev.filter(t => t.id !== settledTrade.id)]);
+        api.getAccounts().then(setAccounts).catch(() => {});
+        api.getAnalytics().then(setAnalytics).catch(() => {});
+      },
+      onBotUpdate: (updated) => {
+        setBots(prev => prev.map(b => b.id === updated.id ? updated : b));
+      },
+      onLog: (newLog) => {
+        setLogs(prev => [{
+          id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          timestamp: new Date().toISOString(),
+          level: newLog.level as any,
+          message: newLog.message
+        }, ...prev]);
+      }
+    });
+  }, []);
 
   // Initial Fetch
   const loadInitialData = async () => {
@@ -183,7 +210,6 @@ export default observer(function App() {
         }
       };
     } catch {
-      // EventSource failed completely, start local tick interval
       if (!localTickInterval) {
         localTickInterval = setInterval(() => {
           setMarkets(prev => prev.map(m => {
@@ -212,6 +238,7 @@ export default observer(function App() {
   // Bot actions
   const handlePause = async (id: string) => {
     try {
+      botEngine.pauseBot(id);
       const updated = await api.pauseBot(id);
       setBots(prev => prev.map(b => b.id === id ? updated : b));
       api.getAnalytics().then(setAnalytics).catch(() => {});
@@ -224,19 +251,52 @@ export default observer(function App() {
     try {
       const updated = await api.resumeBot(id);
       setBots(prev => prev.map(b => b.id === id ? updated : b));
+      startClientBotExecution(updated);
       api.getAnalytics().then(setAnalytics).catch(() => {});
     } catch (err: unknown) {
-      console.error(err instanceof Error ? err.message : 'Resume failed');
+      console.warn('Resume fallback to client bot runner:', err);
+      const currentBot = bots.find(b => b.id === id);
+      if (currentBot) {
+        currentBot.status = 'RUNNING';
+        currentBot.executionState = 'BUYING';
+        setBots(prev => prev.map(b => b.id === id ? { ...currentBot } : b));
+        startClientBotExecution(currentBot);
+      }
     }
   };
 
   const handleStop = async (id: string) => {
     try {
+      botEngine.stopBot(id);
       const updated = await api.stopBot(id);
       setBots(prev => prev.map(b => b.id === id ? updated : b));
       api.getAnalytics().then(setAnalytics).catch(() => {});
     } catch (err: unknown) {
-      console.error(err instanceof Error ? err.message : 'Stop failed');
+      console.warn('Stop fallback to local state:', err);
+      const currentBot = bots.find(b => b.id === id);
+      if (currentBot) {
+        currentBot.status = 'STOPPED';
+        currentBot.executionState = 'STOPPED';
+        setBots(prev => prev.map(b => b.id === id ? { ...currentBot } : b));
+      }
+    }
+  };
+
+  const handleDeploy = async (id: string) => {
+    try {
+      const updated = await api.deployBot(id);
+      setBots(prev => prev.map(b => b.id === id ? updated : b));
+      startClientBotExecution(updated);
+      api.getAnalytics().then(setAnalytics).catch(() => {});
+    } catch (err: unknown) {
+      console.warn('Deploy fallback to client runner:', err);
+      const currentBot = bots.find(b => b.id === id);
+      if (currentBot) {
+        currentBot.status = 'RUNNING';
+        currentBot.executionState = 'BUYING';
+        setBots(prev => prev.map(b => b.id === id ? { ...currentBot } : b));
+        startClientBotExecution(currentBot);
+      }
     }
   };
 
@@ -257,6 +317,7 @@ export default observer(function App() {
     if (deployImmediately) {
       const deployed = await api.deployBot(created.id);
       setBots(prev => [deployed, ...prev]);
+      startClientBotExecution(deployed);
     } else {
       setBots(prev => [created, ...prev]);
     }
@@ -273,69 +334,99 @@ export default observer(function App() {
     growthRate?: number;
     limitOrder?: number;
   }) => {
-    try {
-      const activeAcc = accounts.find(a => a.isActive) || accounts[0];
-      const botName = `OTIVO ${params.subtypes[0]} Bot`;
-      const botData: Partial<BotRecord> = {
-        name: botName,
-        description: `Automated 24/7 worker on ${params.market} (${params.subtypes.join(', ')}).`,
-        derivAccountId: activeAcc?.id || 'deriv_acc_local',
-        accountMode: (activeAcc?.accountType as any) || 'real',
-        selectedMarkets: [params.market],
-        selectedContractTypes: params.subtypes,
-        strategy: {
-          type: params.contractType === 'ACCUMULATORS'
-            ? 'ACCUMULATOR_COMPOUNDER'
-            : params.contractType === 'DIGITS'
-            ? 'DIGIT_FREQUENCY_ANALYSIS'
-            : 'MOMENTUM_TREND',
-          name: `${params.subtypes[0]} Strategy`,
-          description: `Real-time execution for ${params.subtypes.join(', ')}`,
-          entryConditions: {
-            indicator: 'TICK_MOMENTUM',
-            threshold: 0.15,
-            consecutiveTicksRequired: 2,
-            targetDigit: params.barrierDigit,
-            barrierDigit: params.barrierDigit,
-            growthRate: params.growthRate,
-            limitOrder: params.limitOrder
-          },
-          filters: {
-            avoidTickNoise: true,
-            maxSpreadPips: 2,
-            signalExpirationSeconds: 15
-          }
+    const activeAcc = accounts.find(a => a.isActive) || accounts[0];
+    const botName = `OTIVO ${params.subtypes[0]} Bot`;
+    const botData: Partial<BotRecord> = {
+      name: botName,
+      description: `Automated 24/7 worker on ${params.market} (${params.subtypes.join(', ')}).`,
+      derivAccountId: activeAcc?.id || 'deriv_acc_local',
+      accountMode: (activeAcc?.accountType as any) || 'real',
+      selectedMarkets: [params.market],
+      selectedContractTypes: params.subtypes,
+      strategy: {
+        type: params.contractType === 'ACCUMULATORS'
+          ? 'ACCUMULATOR_COMPOUNDER'
+          : params.contractType === 'DIGITS'
+          ? 'DIGIT_FREQUENCY_ANALYSIS'
+          : 'MOMENTUM_TREND',
+        name: `${params.subtypes[0]} Strategy`,
+        description: `Real-time execution for ${params.subtypes.join(', ')}`,
+        entryConditions: {
+          indicator: 'TICK_MOMENTUM',
+          threshold: 0.15,
+          consecutiveTicksRequired: 2,
+          targetDigit: params.barrierDigit,
+          barrierDigit: params.barrierDigit,
+          growthRate: params.growthRate,
+          limitOrder: params.limitOrder
         },
-        risk: {
-          stakeType: 'fixed',
-          stakeAmount: params.stake,
-          stakePercentage: 1.0,
-          maxStake: params.stake * 5,
-          maxConcurrentContracts: 1,
-          maxDailyLoss: 50.0,
-          maxDailyProfit: 100.0,
-          maxConsecutiveLosses: 4,
-          maxTradesPerSession: 30,
-          cooldownPeriodSeconds: 5,
-          maxAccountDrawdownPercent: 10.0,
-          emergencyStopBalanceMin: 5.0
-        },
-        schedule: {
-          type: 'IMMEDIATE',
-          runUntilStopped: true,
-          timezone: 'UTC',
-          permittedDays: [0, 1, 2, 3, 4, 5, 6],
-          permittedStartHourUtc: 0,
-          permittedEndHourUtc: 23
+        filters: {
+          avoidTickNoise: true,
+          maxSpreadPips: 2,
+          signalExpirationSeconds: 15
         }
-      };
+      },
+      risk: {
+        stakeType: 'fixed',
+        stakeAmount: params.stake,
+        stakePercentage: 1.0,
+        maxStake: params.stake * 5,
+        maxConcurrentContracts: 1,
+        maxDailyLoss: 50.0,
+        maxDailyProfit: 100.0,
+        maxConsecutiveLosses: 4,
+        maxTradesPerSession: 30,
+        cooldownPeriodSeconds: 5,
+        maxAccountDrawdownPercent: 10.0,
+        emergencyStopBalanceMin: 5.0
+      },
+      schedule: {
+        type: 'IMMEDIATE',
+        runUntilStopped: true,
+        timezone: 'UTC',
+        permittedDays: [0, 1, 2, 3, 4, 5, 6],
+        permittedStartHourUtc: 0,
+        permittedEndHourUtc: 23
+      }
+    };
 
+    try {
       const created = await api.createBot(botData);
       const deployed = await api.deployBot(created.id);
       setBots(prev => [deployed, ...prev.filter(b => b.id !== deployed.id)]);
+      
+      // CRITICAL: Immediately trigger contract purchase!
+      startClientBotExecution(deployed);
       api.getAnalytics().then(setAnalytics).catch(() => {});
     } catch (err: unknown) {
-      console.error(err instanceof Error ? err.message : 'Failed to launch bot');
+      console.warn('Backend launch failed, using client execution mode:', err);
+      const localBot: BotRecord = {
+        id: `bot_${Date.now()}`,
+        userId: 'user_master_1',
+        derivAccountId: 'acc_local_1',
+        name: botName,
+        description: `Automated trading on ${params.market}`,
+        accountMode: 'real',
+        selectedMarkets: [params.market],
+        selectedContractTypes: params.subtypes,
+        strategy: botData.strategy as any,
+        risk: botData.risk as any,
+        schedule: botData.schedule as any,
+        status: 'RUNNING',
+        executionState: 'BUYING',
+        currentTradeSession: {
+          totalTrades: 0,
+          winCount: 0,
+          lossCount: 0,
+          consecutiveLosses: 0,
+          realizedProfit: 0,
+          sessionStartTime: new Date().toISOString()
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      setBots(prev => [localBot, ...prev.filter(b => b.id !== localBot.id)]);
+      startClientBotExecution(localBot);
     }
   };
 

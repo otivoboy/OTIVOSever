@@ -83,6 +83,9 @@ export type ContractFamily =
   | 'DIGITS'
   | 'ACCUMULATORS'
   | 'MULTIPLIERS'
+  | 'TURBOS'
+  | 'VANILLAS'
+  | 'RUN_HIGH_LOW'
   | 'ASIAN'
   | 'RESET'
   | 'LOOKBACK';

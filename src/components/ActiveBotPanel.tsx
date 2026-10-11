@@ -138,7 +138,7 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
               className="py-2 px-3 rounded-lg bg-[#00e676] hover:bg-[#00c853] text-[#071118] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm shadow-[#00e676]/20 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-[#071118]" />
-              <span>Resume Bot</span>
+              <span>{bot.status === 'PAUSED' ? 'Resume Bot' : 'Run Bot'}</span>
             </button>
           )}
 

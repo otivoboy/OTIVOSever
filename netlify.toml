@@ -6,14 +6,7 @@
   NODE_VERSION = "20"
 
 [[redirects]]
-  # Proxy API requests to persistent backend cloud worker service (e.g. Railway, Render, Fly.io)
-  from = "/api/*"
-  to = "https://otivo-cloud-worker.up.railway.app/api/:splat"
-  status = 200
-  force = false
-
-[[redirects]]
-  # React Router SPA catch-all fallback
+  # React Router SPA catch-all fallback - prevents 404s on subpaths
   from = "/*"
   to = "/index.html"
   status = 200
