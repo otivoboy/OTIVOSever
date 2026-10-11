@@ -1,0 +1,426 @@
+import { useState, useEffect } from 'react';
+import { observer } from 'mobx-react-lite';
+import { rootStore } from './stores/root-store.js';
+import { api } from './services/api.js';
+import {
+  BotRecord,
+  DerivAccount,
+  MarketSymbolInfo,
+  ContractSpecification,
+  TradeRecord,
+  AuditLogRecord,
+  WorkerStatusPayload,
+  AnalyticsPayload
+} from './types/index.js';
+import Layout from './components/Layout.js';
+import { MetricsCards } from './components/MetricsCards.js';
+import { MarketsSection } from './components/MarketsSection.js';
+import { ContractsSection } from './components/ContractsSection.js';
+import { RecentTradesSection } from './components/RecentTradesSection.js';
+import { ActiveBotPanel } from './components/ActiveBotPanel.js';
+import { BotWizardModal } from './components/BotWizardModal.js';
+import { TradeHistoryTable } from './components/TradeHistoryTable.js';
+import { LiveExecutionTerminal } from './components/LiveExecutionTerminal.js';
+import { ServerHealthMonitor } from './components/ServerHealthMonitor.js';
+import { DerivAccountModal } from './components/DerivAccountModal.js';
+import { RiskCenterModal } from './components/RiskCenterModal.js';
+
+export default observer(function App() {
+  // Application Data State
+  const [accounts, setAccounts] = useState<DerivAccount[]>([]);
+  const [markets, setMarkets] = useState<MarketSymbolInfo[]>([]);
+  const [catalogueOptions, setCatalogueOptions] = useState<MarketSymbolInfo[]>([]);
+  const [contracts, setContracts] = useState<ContractSpecification[]>([]);
+  const [bots, setBots] = useState<BotRecord[]>([]);
+  const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [logs, setLogs] = useState<AuditLogRecord[]>([]);
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatusPayload | undefined>();
+  const [analytics, setAnalytics] = useState<AnalyticsPayload | undefined>();
+
+  // Modals
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [isRiskModalOpen, setIsRiskModalOpen] = useState(false);
+  const [preselectedMarket, setPreselectedMarket] = useState<string | undefined>();
+
+  const activeAccount = accounts.find(a => a.isActive) || accounts[0];
+  const activeBot = bots.find(b => b.status === 'RUNNING') || bots[0];
+
+  // Initial Fetch
+  const loadInitialData = async () => {
+    try {
+      const [accs, mktsData, ctrs, bts, trds, lgs, wrk, anl] = await Promise.all([
+        api.getAccounts(),
+        api.getMarkets(),
+        api.getContracts(),
+        api.getBots(),
+        api.getTrades(),
+        api.getLogs(),
+        api.getWorkerStatus(),
+        api.getAnalytics()
+      ]);
+      setAccounts(accs);
+      setMarkets(mktsData.markets);
+      setCatalogueOptions(mktsData.catalogueOptions);
+      setContracts(ctrs);
+      setBots(bts);
+      setTrades(trds);
+      setLogs(lgs);
+      setWorkerStatus(wrk);
+      setAnalytics(anl);
+
+      // Sync MobX client store if accounts exist
+      if (accs.length > 0) {
+        const primary = accs.find(a => a.isActive) || accs[0];
+        rootStore.client.setLoginId(primary.accountNumber);
+        rootStore.client.setBalance(primary.balance);
+        rootStore.client.setCurrency(primary.currency);
+        rootStore.client.setIsConnected(true);
+      }
+    } catch (err) {
+      console.error('[APP] Initial load error:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadInitialData();
+
+    // Connect to Server-Sent Events (SSE) for live ticks and worker events
+    const evtSource = new EventSource('/api/events');
+
+    evtSource.addEventListener('tick', (event) => {
+      try {
+        const tick = JSON.parse(event.data);
+        setMarkets(prev => prev.map(m => {
+          if (m.symbol === tick.symbol) {
+            const hist = m.priceHistory ? [...m.priceHistory] : [];
+            hist.push(tick.quote);
+            if (hist.length > 50) hist.shift();
+            const freq = m.digitFrequency ? [...m.digitFrequency] : new Array(10).fill(0);
+            freq[tick.digit] = (freq[tick.digit] || 0) + 1;
+            return {
+              ...m,
+              currentPrice: tick.quote,
+              lastDigit: tick.digit,
+              priceHistory: hist,
+              digitFrequency: freq
+            };
+          }
+          return m;
+        }));
+      } catch {}
+    });
+
+    evtSource.addEventListener('heartbeat', () => {
+      api.getWorkerStatus().then(setWorkerStatus).catch(() => {});
+      api.getAnalytics().then(setAnalytics).catch(() => {});
+    });
+
+    evtSource.addEventListener('bot_updated', (event) => {
+      try {
+        const updatedBot: BotRecord = JSON.parse(event.data);
+        setBots(prev => prev.map(b => b.id === updatedBot.id ? updatedBot : b));
+      } catch {}
+    });
+
+    evtSource.addEventListener('trade_placed', (event) => {
+      try {
+        const newTrade: TradeRecord = JSON.parse(event.data);
+        setTrades(prev => [newTrade, ...prev.filter(t => t.id !== newTrade.id)]);
+      } catch {}
+    });
+
+    evtSource.addEventListener('trade_settled', (event) => {
+      try {
+        const settledTrade: TradeRecord = JSON.parse(event.data);
+        setTrades(prev => [settledTrade, ...prev.filter(t => t.id !== settledTrade.id)]);
+        api.getAccounts().then(setAccounts).catch(() => {});
+        api.getAnalytics().then(setAnalytics).catch(() => {});
+      } catch {}
+    });
+
+    const logInterval = setInterval(() => {
+      api.getLogs().then(setLogs).catch(() => {});
+    }, 5000);
+
+    return () => {
+      evtSource.close();
+      clearInterval(logInterval);
+    };
+  }, []);
+
+  // Bot actions
+  const handlePause = async (id: string) => {
+    try {
+      const updated = await api.pauseBot(id);
+      setBots(prev => prev.map(b => b.id === id ? updated : b));
+      api.getAnalytics().then(setAnalytics).catch(() => {});
+    } catch (err: unknown) {
+      console.error(err instanceof Error ? err.message : 'Pause failed');
+    }
+  };
+
+  const handleResume = async (id: string) => {
+    try {
+      const updated = await api.resumeBot(id);
+      setBots(prev => prev.map(b => b.id === id ? updated : b));
+      api.getAnalytics().then(setAnalytics).catch(() => {});
+    } catch (err: unknown) {
+      console.error(err instanceof Error ? err.message : 'Resume failed');
+    }
+  };
+
+  const handleStop = async (id: string) => {
+    try {
+      const updated = await api.stopBot(id);
+      setBots(prev => prev.map(b => b.id === id ? updated : b));
+      api.getAnalytics().then(setAnalytics).catch(() => {});
+    } catch (err: unknown) {
+      console.error(err instanceof Error ? err.message : 'Stop failed');
+    }
+  };
+
+  const handleConfigureSlot = async (slotNumber: 1 | 2, catalogueSymbol: string) => {
+    try {
+      const updatedMarket = await api.configureMarketSlot(slotNumber, catalogueSymbol);
+      setMarkets(prev => {
+        const without = prev.filter(m => m.symbol !== updatedMarket.symbol);
+        return [...without, updatedMarket];
+      });
+    } catch (err: unknown) {
+      console.error(err instanceof Error ? err.message : 'Failed to configure slot');
+    }
+  };
+
+  const handleSaveAndDeploy = async (botData: Partial<BotRecord>, deployImmediately: boolean) => {
+    const created = await api.createBot(botData);
+    if (deployImmediately) {
+      const deployed = await api.deployBot(created.id);
+      setBots(prev => [deployed, ...prev]);
+    } else {
+      setBots(prev => [created, ...prev]);
+    }
+    api.getAnalytics().then(setAnalytics).catch(() => {});
+  };
+
+  // Run a bot immediately with selected contract specifications
+  const handleRunBotWithContract = async (params: {
+    contractType: string;
+    subtypes: string[];
+    market: string;
+    stake: number;
+    barrierDigit?: number;
+    growthRate?: number;
+    limitOrder?: number;
+  }) => {
+    try {
+      const activeAcc = accounts.find(a => a.isActive) || accounts[0];
+      const botName = `OTIVO ${params.subtypes[0]} Bot`;
+      const botData: Partial<BotRecord> = {
+        name: botName,
+        description: `Automated 24/7 worker on ${params.market} (${params.subtypes.join(', ')}).`,
+        derivAccountId: activeAcc?.id || 'deriv_acc_local',
+        accountMode: (activeAcc?.accountType as any) || 'real',
+        selectedMarkets: [params.market],
+        selectedContractTypes: params.subtypes,
+        strategy: {
+          type: params.contractType === 'ACCUMULATORS'
+            ? 'ACCUMULATOR_COMPOUNDER'
+            : params.contractType === 'DIGITS'
+            ? 'DIGIT_FREQUENCY_ANALYSIS'
+            : 'MOMENTUM_TREND',
+          name: `${params.subtypes[0]} Strategy`,
+          description: `Real-time execution for ${params.subtypes.join(', ')}`,
+          entryConditions: {
+            indicator: 'TICK_MOMENTUM',
+            threshold: 0.15,
+            consecutiveTicksRequired: 2,
+            targetDigit: params.barrierDigit,
+            barrierDigit: params.barrierDigit,
+            growthRate: params.growthRate,
+            limitOrder: params.limitOrder
+          },
+          filters: {
+            avoidTickNoise: true,
+            maxSpreadPips: 2,
+            signalExpirationSeconds: 15
+          }
+        },
+        risk: {
+          stakeType: 'fixed',
+          stakeAmount: params.stake,
+          stakePercentage: 1.0,
+          maxStake: params.stake * 5,
+          maxConcurrentContracts: 1,
+          maxDailyLoss: 50.0,
+          maxDailyProfit: 100.0,
+          maxConsecutiveLosses: 4,
+          maxTradesPerSession: 30,
+          cooldownPeriodSeconds: 5,
+          maxAccountDrawdownPercent: 10.0,
+          emergencyStopBalanceMin: 5.0
+        },
+        schedule: {
+          type: 'IMMEDIATE',
+          runUntilStopped: true,
+          timezone: 'UTC',
+          permittedDays: [0, 1, 2, 3, 4, 5, 6],
+          permittedStartHourUtc: 0,
+          permittedEndHourUtc: 23
+        }
+      };
+
+      const created = await api.createBot(botData);
+      const deployed = await api.deployBot(created.id);
+      setBots(prev => [deployed, ...prev.filter(b => b.id !== deployed.id)]);
+      api.getAnalytics().then(setAnalytics).catch(() => {});
+    } catch (err: unknown) {
+      console.error(err instanceof Error ? err.message : 'Failed to launch bot');
+    }
+  };
+
+  const handleQuickRun = () => {
+    handleRunBotWithContract({
+      contractType: 'RISE_FALL',
+      subtypes: ['CALL', 'PUT'],
+      market: '1HZ50V',
+      stake: 2.0
+    });
+  };
+
+  const handleSwitchAccount = async (id: string) => {
+    await api.switchAccount(id);
+    const updated = await api.getAccounts();
+    setAccounts(updated);
+    const current = updated.find(a => a.id === id);
+    if (current) {
+      rootStore.client.setLoginId(current.accountNumber);
+      rootStore.client.setBalance(current.balance);
+      rootStore.client.setCurrency(current.currency);
+    }
+  };
+
+  const handleConnectAccount = async (params: {
+    token: string;
+    accountNumber: string;
+    accountType: 'demo' | 'real';
+    currency?: string;
+  }) => {
+    const created = await api.connectAccount(params);
+    setAccounts(prev => [created, ...prev.map(a => ({ ...a, isActive: false }))]);
+    rootStore.client.setLoginId(created.accountNumber);
+    rootStore.client.setBalance(created.balance);
+    rootStore.client.setCurrency(created.currency);
+    rootStore.client.setIsConnected(true);
+  };
+
+  const handleDisconnectAccount = async (id: string) => {
+    await api.disconnectAccount(id);
+    const updated = await api.getAccounts();
+    setAccounts(updated);
+  };
+
+  return (
+    <Layout>
+      <div className="flex-1 p-4 lg:p-5 overflow-y-auto space-y-4">
+        {/* Unified Platform View */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+          {/* Left Column (8 / 12 width) */}
+          <div className="xl:col-span-8 space-y-4">
+            {/* 2 Rows of 4 Metric Cards */}
+            <MetricsCards analytics={analytics} />
+
+            {/* Markets Section (Standard 8 + 2 Custom Slots) */}
+            <MarketsSection
+              markets={markets}
+              catalogueOptions={catalogueOptions}
+              onConfigureSlot={handleConfigureSlot}
+              onSelectMarket={(sym) => {
+                setPreselectedMarket(sym);
+                setIsWizardOpen(true);
+              }}
+            />
+
+            {/* Contract Types Section with live barrier/accumulator controls & Run Bot */}
+            <ContractsSection
+              markets={markets}
+              onSelectContract={(_type) => {}}
+              onRunBotWithContract={handleRunBotWithContract}
+            />
+
+            {/* Recent Trades Table */}
+            <RecentTradesSection
+              trades={trades}
+            />
+          </div>
+
+          {/* Right Column (4 / 12 width) */}
+          <div className="xl:col-span-4 space-y-4">
+            {/* Active Bot Panel with Live Trading, Pause, Run, Stop */}
+            <ActiveBotPanel
+              bot={activeBot}
+              onPause={handlePause}
+              onResume={handleResume}
+              onStop={handleStop}
+              onEditSchedule={() => setIsWizardOpen(true)}
+              onQuickRun={handleQuickRun}
+            />
+
+            {/* Live Cloud Worker Execution Terminal */}
+            <div className="p-4 rounded-xl bg-[#0a141d] border border-[#132431] space-y-2">
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                Live Cloud Worker Logs
+              </h3>
+              <LiveExecutionTerminal logs={logs} />
+            </div>
+          </div>
+        </div>
+
+        {/* Historical Ledger & Server Monitor */}
+        <div className="space-y-4 pt-2 border-t border-[#132431]">
+          <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+            Trade History & Cloud Server Health
+          </h3>
+          <TradeHistoryTable trades={trades} bots={bots} />
+          <ServerHealthMonitor
+            status={workerStatus}
+            runningBots={bots.filter(b => b.status === 'RUNNING')}
+          />
+        </div>
+      </div>
+
+      {/* Modals */}
+      <BotWizardModal
+        isOpen={isWizardOpen}
+        onClose={() => setIsWizardOpen(false)}
+        accounts={accounts}
+        markets={markets}
+        contracts={contracts}
+        preselectedMarket={preselectedMarket}
+        onSaveAndDeploy={handleSaveAndDeploy}
+      />
+
+      <DerivAccountModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        accounts={accounts}
+        onSwitchAccount={handleSwitchAccount}
+        onConnectAccount={handleConnectAccount}
+        onDisconnectAccount={handleDisconnectAccount}
+      />
+
+      <RiskCenterModal
+        isOpen={isRiskModalOpen}
+        onClose={() => setIsRiskModalOpen(false)}
+        bots={bots}
+        activeAccount={activeAccount}
+        onEmergencyStopAll={async () => {
+          for (const b of bots.filter(b => b.status === 'RUNNING')) {
+            await handleStop(b.id);
+          }
+          setIsRiskModalOpen(false);
+        }}
+      />
+    </Layout>
+  );
+});

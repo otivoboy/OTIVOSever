@@ -1,0 +1,6 @@
+{
+  "name": "OTIVO AI CLOUD DERIV UNIVERSAL BOT",
+  "description": "24/7 Automated Cloud Trading Platform for Deriv synthetic indices, continuous background execution worker, scheduled trading engine, and real-time risk manager.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
