@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 const APP_ID = '69546';
-const NEW_CLIENT_ID = '33CKnL0OUusqORs0YfjnV';
+const NEW_CLIENT_ID = '34EgGcZ4kdDYvSMRn1Jxo';
 
 export const refreshAccessToken = async (): Promise<string | null> => {
   const refreshToken = localStorage.getItem('deriv_oauth_refresh_token');
@@ -61,7 +61,7 @@ export const useOauth2 = () => {
   const getRedirectUri = () => {
     // Must exactly match the registered Redirect URI in Deriv Dashboard
     if (window.location.hostname.includes('netlify.app') || window.location.hostname === 'otivobotai.netlify.app') {
-      return 'https://otivobotai.netlify.app';
+      return 'https://otivoserver.netlify.app';
     }
     return `${window.location.origin}${window.location.pathname}`;
   };
