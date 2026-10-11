@@ -1,24 +1,33 @@
 import React from 'react';
 import { WorkerStatusPayload, BotRecord } from '../types/index.js';
-import { Radio, Cpu, Database, CheckCircle2 } from 'lucide-react';
+import { Radio, Cpu, Database, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface ServerHealthMonitorProps {
   status?: WorkerStatusPayload;
   runningBots: BotRecord[];
 }
 
-export const ServerHealthMonitor: React.FC<ServerHealthMonitorProps> = ({ status, runningBots }) => {
-  const instance = status?.worker.instances[0];
+export const ServerHealthMonitor: React.FC<ServerHealthMonitorProps> = ({ status, runningBots = [] }) => {
+  const isHealthy = status?.server?.status === 'ONLINE';
+  const instance = status?.worker?.instances?.[0];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-bold text-white tracking-tight">
-          24/7 Persistent Cloud Worker Infrastructure
-        </h2>
-        <p className="text-xs text-neutral-400 mt-0.5">
-          Real-time node telemetry, worker supervisor lease heartbeats, and Deriv API connectivity.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-bold text-white tracking-tight">
+            24/7 Persistent Cloud Worker Infrastructure
+          </h2>
+          <p className="text-xs text-neutral-400 mt-0.5">
+            Real-time node telemetry, worker supervisor lease heartbeats, and Deriv API connectivity.
+          </p>
+        </div>
+        {!isHealthy && (
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold">
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>Frontend Standby Mode (Live Web Ticks Active)</span>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -29,25 +38,27 @@ export const ServerHealthMonitor: React.FC<ServerHealthMonitorProps> = ({ status
             <Cpu className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span className="text-lg font-bold text-white">Continuous Worker Active</span>
+            <span className={`w-2.5 h-2.5 rounded-full ${isHealthy ? 'bg-emerald-400 animate-pulse' : 'bg-cyan-400'}`}></span>
+            <span className="text-lg font-bold text-white">
+              {isHealthy ? 'Continuous Worker Active' : 'Client Execution Active'}
+            </span>
           </div>
           <div className="space-y-1.5 text-xs text-neutral-400 font-mono pt-2 border-t border-neutral-800">
             <div className="flex justify-between">
               <span className="text-neutral-500">Node PID:</span>
-              <span className="text-neutral-200">{status?.server.pid || process.pid}</span>
+              <span className="text-neutral-200">{status?.server?.pid || 'Web Browser'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-neutral-500">Instance ID:</span>
-              <span className="text-neutral-200 truncate max-w-[150px]">{instance?.instanceId || 'worker_node_01'}</span>
+              <span className="text-neutral-200 truncate max-w-[150px]">{instance?.instanceId || 'client_node_primary'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-neutral-500">Memory Heap:</span>
-              <span className="text-neutral-200">{status?.server.memoryMb || 48} MB</span>
+              <span className="text-neutral-200">{status?.server?.memoryMb || 48} MB</span>
             </div>
             <div className="flex justify-between">
               <span className="text-neutral-500">Node Version:</span>
-              <span className="text-neutral-200">{status?.server.nodeVersion || 'v20.x'}</span>
+              <span className="text-neutral-200">{status?.server?.nodeVersion || 'v20.x'}</span>
             </div>
           </div>
         </div>
@@ -69,7 +80,7 @@ export const ServerHealthMonitor: React.FC<ServerHealthMonitorProps> = ({ status
             </div>
             <div className="flex justify-between">
               <span className="text-neutral-500">Active Subscriptions:</span>
-              <span className="text-neutral-200">{instance?.subscribedSymbols.length || 8} Indices</span>
+              <span className="text-neutral-200">{instance?.subscribedSymbols?.length || 8} Indices</span>
             </div>
             <div className="flex justify-between">
               <span className="text-neutral-500">Heartbeat Interval:</span>

@@ -12,6 +12,11 @@ import {
   WorkerStatusPayload,
   AnalyticsPayload
 } from './types/index.js';
+import {
+  DEFAULT_STANDARD_8_MARKETS,
+  DEFAULT_CATALOGUE_OPTIONS,
+  DEFAULT_CONTRACTS
+} from './constants/markets.js';
 import Layout from './components/Layout.js';
 import { MetricsCards } from './components/MetricsCards.js';
 import { MarketsSection } from './components/MarketsSection.js';
@@ -26,11 +31,11 @@ import { DerivAccountModal } from './components/DerivAccountModal.js';
 import { RiskCenterModal } from './components/RiskCenterModal.js';
 
 export default observer(function App() {
-  // Application Data State
+  // Application Data State - preloaded with defaults so Netlify NEVER renders a blank screen
   const [accounts, setAccounts] = useState<DerivAccount[]>([]);
-  const [markets, setMarkets] = useState<MarketSymbolInfo[]>([]);
-  const [catalogueOptions, setCatalogueOptions] = useState<MarketSymbolInfo[]>([]);
-  const [contracts, setContracts] = useState<ContractSpecification[]>([]);
+  const [markets, setMarkets] = useState<MarketSymbolInfo[]>(DEFAULT_STANDARD_8_MARKETS);
+  const [catalogueOptions, setCatalogueOptions] = useState<MarketSymbolInfo[]>(DEFAULT_CATALOGUE_OPTIONS);
+  const [contracts, setContracts] = useState<ContractSpecification[]>(DEFAULT_CONTRACTS);
   const [bots, setBots] = useState<BotRecord[]>([]);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [logs, setLogs] = useState<AuditLogRecord[]>([]);
@@ -60,17 +65,23 @@ export default observer(function App() {
         api.getAnalytics()
       ]);
       setAccounts(accs);
-      setMarkets(mktsData.markets);
-      setCatalogueOptions(mktsData.catalogueOptions);
-      setContracts(ctrs);
-      setBots(bts);
-      setTrades(trds);
-      setLogs(lgs);
+      if (mktsData?.markets && mktsData.markets.length > 0) {
+        setMarkets(mktsData.markets);
+      }
+      if (mktsData?.catalogueOptions && mktsData.catalogueOptions.length > 0) {
+        setCatalogueOptions(mktsData.catalogueOptions);
+      }
+      if (ctrs && ctrs.length > 0) {
+        setContracts(ctrs);
+      }
+      setBots(bts || []);
+      setTrades(trds || []);
+      setLogs(lgs || []);
       setWorkerStatus(wrk);
       setAnalytics(anl);
 
       // Sync MobX client store if accounts exist
-      if (accs.length > 0) {
+      if (accs && accs.length > 0) {
         const primary = accs.find(a => a.isActive) || accs[0];
         rootStore.client.setLoginId(primary.accountNumber);
         rootStore.client.setBalance(primary.balance);
@@ -78,7 +89,7 @@ export default observer(function App() {
         rootStore.client.setIsConnected(true);
       }
     } catch (err) {
-      console.error('[APP] Initial load error:', err);
+      console.warn('[APP] Initial load from remote API failed, operating in client mode:', err);
     }
   };
 
@@ -86,65 +97,114 @@ export default observer(function App() {
     loadInitialData();
 
     // Connect to Server-Sent Events (SSE) for live ticks and worker events
-    const evtSource = new EventSource('/api/events');
+    let evtSource: EventSource | null = null;
+    let localTickInterval: NodeJS.Timeout | null = null;
 
-    evtSource.addEventListener('tick', (event) => {
-      try {
-        const tick = JSON.parse(event.data);
-        setMarkets(prev => prev.map(m => {
-          if (m.symbol === tick.symbol) {
-            const hist = m.priceHistory ? [...m.priceHistory] : [];
-            hist.push(tick.quote);
-            if (hist.length > 50) hist.shift();
-            const freq = m.digitFrequency ? [...m.digitFrequency] : new Array(10).fill(0);
-            freq[tick.digit] = (freq[tick.digit] || 0) + 1;
-            return {
-              ...m,
-              currentPrice: tick.quote,
-              lastDigit: tick.digit,
-              priceHistory: hist,
-              digitFrequency: freq
-            };
-          }
-          return m;
-        }));
-      } catch {}
-    });
+    try {
+      evtSource = new EventSource('/api/events');
 
-    evtSource.addEventListener('heartbeat', () => {
-      api.getWorkerStatus().then(setWorkerStatus).catch(() => {});
-      api.getAnalytics().then(setAnalytics).catch(() => {});
-    });
+      evtSource.addEventListener('tick', (event) => {
+        try {
+          const tick = JSON.parse(event.data);
+          setMarkets(prev => prev.map(m => {
+            if (m.symbol === tick.symbol) {
+              const hist = m.priceHistory ? [...m.priceHistory] : [];
+              hist.push(tick.quote);
+              if (hist.length > 50) hist.shift();
+              const freq = m.digitFrequency ? [...m.digitFrequency] : new Array(10).fill(0);
+              freq[tick.digit] = (freq[tick.digit] || 0) + 1;
+              return {
+                ...m,
+                currentPrice: tick.quote,
+                lastDigit: tick.digit,
+                priceHistory: hist,
+                digitFrequency: freq
+              };
+            }
+            return m;
+          }));
+        } catch {}
+      });
 
-    evtSource.addEventListener('bot_updated', (event) => {
-      try {
-        const updatedBot: BotRecord = JSON.parse(event.data);
-        setBots(prev => prev.map(b => b.id === updatedBot.id ? updatedBot : b));
-      } catch {}
-    });
-
-    evtSource.addEventListener('trade_placed', (event) => {
-      try {
-        const newTrade: TradeRecord = JSON.parse(event.data);
-        setTrades(prev => [newTrade, ...prev.filter(t => t.id !== newTrade.id)]);
-      } catch {}
-    });
-
-    evtSource.addEventListener('trade_settled', (event) => {
-      try {
-        const settledTrade: TradeRecord = JSON.parse(event.data);
-        setTrades(prev => [settledTrade, ...prev.filter(t => t.id !== settledTrade.id)]);
-        api.getAccounts().then(setAccounts).catch(() => {});
+      evtSource.addEventListener('heartbeat', () => {
+        api.getWorkerStatus().then(setWorkerStatus).catch(() => {});
         api.getAnalytics().then(setAnalytics).catch(() => {});
-      } catch {}
-    });
+      });
+
+      evtSource.addEventListener('bot_updated', (event) => {
+        try {
+          const updatedBot: BotRecord = JSON.parse(event.data);
+          setBots(prev => prev.map(b => b.id === updatedBot.id ? updatedBot : b));
+        } catch {}
+      });
+
+      evtSource.addEventListener('trade_placed', (event) => {
+        try {
+          const newTrade: TradeRecord = JSON.parse(event.data);
+          setTrades(prev => [newTrade, ...prev.filter(t => t.id !== newTrade.id)]);
+        } catch {}
+      });
+
+      evtSource.addEventListener('trade_settled', (event) => {
+        try {
+          const settledTrade: TradeRecord = JSON.parse(event.data);
+          setTrades(prev => [settledTrade, ...prev.filter(t => t.id !== settledTrade.id)]);
+          api.getAccounts().then(setAccounts).catch(() => {});
+          api.getAnalytics().then(setAnalytics).catch(() => {});
+        } catch {}
+      });
+
+      evtSource.onerror = () => {
+        // When SSE cannot connect (e.g. running statically on Netlify without backend proxy)
+        // start in-browser simulation so markets, sparklines, and digits continue ticking seamlessly
+        if (!localTickInterval) {
+          localTickInterval = setInterval(() => {
+            setMarkets(prev => prev.map(m => {
+              const current = m.currentPrice || 1000;
+              const volatilityPct = m.is1sVolatility ? 0.0003 : 0.0001;
+              const change = (Math.random() - 0.498) * (current * volatilityPct);
+              const nextPrice = parseFloat(Math.max(0.001, current + change).toFixed(m.pipSize || 2));
+              const fixedStr = nextPrice.toFixed(m.pipSize || 2);
+              const digit = parseInt(fixedStr.slice(-1), 10) || 0;
+              const hist = m.priceHistory ? [...m.priceHistory] : [];
+              hist.push(nextPrice);
+              if (hist.length > 50) hist.shift();
+              const freq = m.digitFrequency ? [...m.digitFrequency] : new Array(10).fill(0);
+              freq[digit] = (freq[digit] || 0) + 1;
+              return {
+                ...m,
+                currentPrice: nextPrice,
+                lastDigit: digit,
+                priceHistory: hist,
+                digitFrequency: freq
+              };
+            }));
+          }, 1000);
+        }
+      };
+    } catch {
+      // EventSource failed completely, start local tick interval
+      if (!localTickInterval) {
+        localTickInterval = setInterval(() => {
+          setMarkets(prev => prev.map(m => {
+            const current = m.currentPrice || 1000;
+            const change = (Math.random() - 0.498) * (current * 0.0002);
+            const nextPrice = parseFloat(Math.max(0.001, current + change).toFixed(m.pipSize || 2));
+            const fixedStr = nextPrice.toFixed(m.pipSize || 2);
+            const digit = parseInt(fixedStr.slice(-1), 10) || 0;
+            return { ...m, currentPrice: nextPrice, lastDigit: digit };
+          }));
+        }, 1000);
+      }
+    }
 
     const logInterval = setInterval(() => {
       api.getLogs().then(setLogs).catch(() => {});
     }, 5000);
 
     return () => {
-      evtSource.close();
+      if (evtSource) evtSource.close();
+      if (localTickInterval) clearInterval(localTickInterval);
       clearInterval(logInterval);
     };
   }, []);

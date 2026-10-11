@@ -1,0 +1,84 @@
+{
+  "users": [
+    {
+      "id": "user_master_1",
+      "name": "Trader",
+      "email": "trader@otivo.ai",
+      "createdAt": "2026-10-11T22:27:04.285Z"
+    }
+  ],
+  "derivAccounts": [],
+  "bots": [],
+  "trades": [],
+  "logs": [
+    {
+      "id": "log_1791757642726_e3f96",
+      "timestamp": "2026-10-11T22:27:22.726Z",
+      "level": "INFO",
+      "message": "[SCHEDULER] Persistent cloud schedule engine started. Independent UTC clock active."
+    },
+    {
+      "id": "log_1791757642725_zppjy",
+      "timestamp": "2026-10-11T22:27:22.725Z",
+      "level": "INFO",
+      "message": "[RECOVERY] Recovering engine state: found 0 bots in active state."
+    },
+    {
+      "id": "log_1791757624348_xzhx1",
+      "timestamp": "2026-10-11T22:27:04.348Z",
+      "level": "INFO",
+      "message": "[SCHEDULER] Persistent cloud schedule engine started. Independent UTC clock active."
+    },
+    {
+      "id": "log_1791757624347_mqf4l",
+      "timestamp": "2026-10-11T22:27:04.347Z",
+      "level": "INFO",
+      "message": "[RECOVERY] Recovering engine state: found 0 bots in active state."
+    },
+    {
+      "id": "log_boot_01",
+      "timestamp": "2026-10-11T22:27:04.285Z",
+      "level": "INFO",
+      "message": "OTIVO Cloud Worker Storage Engine initialized. Durable state active."
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notif_init_01",
+      "userId": "user_master_1",
+      "timestamp": "2026-10-11T22:27:04.285Z",
+      "type": "WORKER_RECOVERED",
+      "title": "Cloud Worker Online",
+      "message": "Persistent backend engine is connected to Deriv API and ready for deployment.",
+      "read": false
+    }
+  ],
+  "workerInstances": [
+    {
+      "instanceId": "worker_162_jr2tx",
+      "hostname": "otivo-cloud-node-01",
+      "pid": 162,
+      "startedAt": "2026-10-11T22:27:19.351Z",
+      "lastHeartbeat": "2026-10-11T22:27:19.351Z",
+      "status": "HEALTHY",
+      "activeBotsCount": 0,
+      "subscribedSymbols": [],
+      "memoryUsageMb": 62,
+      "databaseConnected": true,
+      "derivWsConnected": false
+    },
+    {
+      "instanceId": "worker_221_7s10z",
+      "hostname": "otivo-cloud-node-01",
+      "pid": 221,
+      "startedAt": "2026-10-11T22:42:10.962Z",
+      "lastHeartbeat": "2026-10-11T22:42:10.962Z",
+      "status": "HEALTHY",
+      "activeBotsCount": 0,
+      "subscribedSymbols": [],
+      "memoryUsageMb": 65,
+      "databaseConnected": true,
+      "derivWsConnected": false
+    }
+  ]
+}

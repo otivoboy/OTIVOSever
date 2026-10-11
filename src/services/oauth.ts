@@ -69,11 +69,7 @@ export const useOauth2 = () => {
   };
 
   const getRedirectUri = () => {
-    // Must exactly match the registered Redirect URI in Deriv Dashboard
-    if (window.location.hostname.includes('netlify.app') || window.location.hostname === 'otivobotai.netlify.app') {
-      return 'https://otivobotai.netlify.app';
-    }
-    return `${window.location.origin}${window.location.pathname}`;
+    return `${window.location.origin}${window.location.pathname}`.replace(/\/$/, '');
   };
 
   const login = async () => {

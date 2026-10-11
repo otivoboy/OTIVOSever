@@ -21,7 +21,7 @@ export const KpiMetrics: React.FC<KpiMetricsProps> = ({ analytics, workerStatus 
     winRate: 75
   };
 
-  const workerUptime = workerStatus?.server.uptimeSeconds || 3600;
+  const workerUptime = workerStatus?.server?.uptimeSeconds || 3600;
   const hours = Math.floor(workerUptime / 3600);
   const minutes = Math.floor((workerUptime % 3600) / 60);
 
@@ -104,7 +104,7 @@ export const KpiMetrics: React.FC<KpiMetricsProps> = ({ analytics, workerStatus 
         <div className="mt-1 text-[11px] text-neutral-400 font-mono tabular-nums">
           <span>Uptime: {hours}h {minutes}m</span>
           <span className="mx-1" aria-hidden="true">|</span>
-          <span>PID {workerStatus?.server.pid || process.pid}</span>
+          <span>PID {workerStatus?.server?.pid || 'Browser Node'}</span>
         </div>
       </div>
 
