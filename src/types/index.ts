@@ -127,6 +127,9 @@ export interface RiskConfig {
   stakeAmount: number;
   stakePercentage: number;
   maxStake: number;
+  martingaleMultiplier?: number; // e.g. 2.0x
+  takeProfit?: number; // Target session profit cutoff ($ USD)
+  stopLoss?: number; // Max session loss cutoff ($ USD)
   maxConcurrentContracts: number;
   maxDailyLoss: number;
   maxDailyProfit: number;

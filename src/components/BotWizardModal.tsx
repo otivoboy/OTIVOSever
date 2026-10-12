@@ -63,6 +63,7 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
   // Step 5: Risk
   const [stakeType, setStakeType] = useState<'fixed' | 'percentage'>('fixed');
   const [stakeAmount, setStakeAmount] = useState(2.0);
+  const [martingaleMultiplier, setMartingaleMultiplier] = useState(2.0);
   const [stakePercentage, setStakePercentage] = useState(1.0);
   const [maxStake, setMaxStake] = useState(25.0);
   const [maxDailyLoss, setMaxDailyLoss] = useState(30.0);
@@ -131,6 +132,9 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
         stakeAmount,
         stakePercentage,
         maxStake,
+        martingaleMultiplier,
+        takeProfit: maxDailyProfit,
+        stopLoss: maxDailyLoss,
         maxConcurrentContracts: 1,
         maxDailyLoss,
         maxDailyProfit,
@@ -524,7 +528,7 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
           {/* STEP 5: Risk */}
           {step === 5 && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-neutral-400 mb-1">Stake Amount ($ USD)</label>
                   <input
@@ -534,6 +538,18 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
                     value={stakeAmount}
                     onChange={(e) => setStakeAmount(parseFloat(e.target.value))}
                     className="w-full bg-neutral-950 border border-neutral-800 rounded-lg p-2 text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Martingale Factor (x)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="1.0"
+                    max="5.0"
+                    value={martingaleMultiplier}
+                    onChange={(e) => setMartingaleMultiplier(parseFloat(e.target.value))}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-lg p-2 text-emerald-400 font-mono font-bold"
                   />
                 </div>
                 <div>

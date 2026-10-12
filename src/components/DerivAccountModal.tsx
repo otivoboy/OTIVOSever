@@ -26,7 +26,7 @@ export const DerivAccountModal: React.FC<DerivAccountModalProps> = ({
 }) => {
   const [token, setToken] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
-  const [accountType] = useState<'demo' | 'real'>('demo');
+  const [accountType, setAccountType] = useState<'demo' | 'real'>('real');
   const [currency, setCurrency] = useState('USD');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,12 +144,39 @@ export const DerivAccountModal: React.FC<DerivAccountModalProps> = ({
                 <span>{error}</span>
               </div>
             )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setAccountType('real')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  accountType === 'real'
+                    ? 'bg-emerald-500 text-[#071118]'
+                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                }`}
+              >
+                Real Account (CR...)
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccountType('demo')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  accountType === 'demo'
+                    ? 'bg-amber-500 text-[#071118]'
+                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                }`}
+              >
+                Demo Account (VRTC...)
+              </button>
+            </div>
+
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-[11px] text-neutral-400 mb-1">Account Number</label>
+                <label className="block text-[11px] text-neutral-400 mb-1">
+                  Account Number ({accountType === 'real' ? 'CR...' : 'VRTC...'})
+                </label>
                 <input
                   type="text"
-                  placeholder="e.g. CR123456"
+                  placeholder={accountType === 'real' ? 'e.g. CR123456' : 'e.g. VRTC123456'}
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
                   className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2 text-xs text-white uppercase font-mono"

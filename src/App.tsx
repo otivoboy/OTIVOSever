@@ -333,6 +333,9 @@ export default observer(function App() {
     barrierDigit?: number;
     growthRate?: number;
     limitOrder?: number;
+    martingaleMultiplier?: number;
+    takeProfit?: number;
+    stopLoss?: number;
   }) => {
     const activeAcc = accounts.find(a => a.isActive) || accounts[0];
     const botName = `OTIVO ${params.subtypes[0]} Bot`;
@@ -369,14 +372,17 @@ export default observer(function App() {
       risk: {
         stakeType: 'fixed',
         stakeAmount: params.stake,
+        martingaleMultiplier: params.martingaleMultiplier || 2.0,
+        takeProfit: params.takeProfit || 10.0,
+        stopLoss: params.stopLoss || 20.0,
         stakePercentage: 1.0,
-        maxStake: params.stake * 5,
+        maxStake: params.stake * 10,
         maxConcurrentContracts: 1,
-        maxDailyLoss: 50.0,
-        maxDailyProfit: 100.0,
+        maxDailyLoss: params.stopLoss || 20.0,
+        maxDailyProfit: params.takeProfit || 10.0,
         maxConsecutiveLosses: 4,
-        maxTradesPerSession: 30,
-        cooldownPeriodSeconds: 5,
+        maxTradesPerSession: 50,
+        cooldownPeriodSeconds: 3,
         maxAccountDrawdownPercent: 10.0,
         emergencyStopBalanceMin: 5.0
       },
@@ -435,7 +441,10 @@ export default observer(function App() {
       contractType: 'RISE_FALL',
       subtypes: ['CALL', 'PUT'],
       market: '1HZ50V',
-      stake: 2.0
+      stake: 2.0,
+      martingaleMultiplier: 2.0,
+      takeProfit: 10.0,
+      stopLoss: 20.0
     });
   };
 
@@ -448,6 +457,7 @@ export default observer(function App() {
       rootStore.client.setLoginId(current.accountNumber);
       rootStore.client.setBalance(current.balance);
       rootStore.client.setCurrency(current.currency);
+      botEngine.initTokenFromStorage();
     }
   };
 
@@ -457,6 +467,7 @@ export default observer(function App() {
     accountType: 'demo' | 'real';
     currency?: string;
   }) => {
+    botEngine.setToken(params.token);
     const created = await api.connectAccount(params);
     setAccounts(prev => [created, ...prev.map(a => ({ ...a, isActive: false }))]);
     rootStore.client.setLoginId(created.accountNumber);
@@ -470,6 +481,8 @@ export default observer(function App() {
     const updated = await api.getAccounts();
     setAccounts(updated);
   };
+
+  const isAnyBotRunning = bots.some(b => b.status === 'RUNNING');
 
   return (
     <Layout>
@@ -492,11 +505,17 @@ export default observer(function App() {
               }}
             />
 
-            {/* Contract Types Section with live barrier/accumulator controls & Run Bot */}
+            {/* Contract Types Section with live barrier/accumulator controls & Run/Red Stop Bot */}
             <ContractsSection
               markets={markets}
               onSelectContract={(_type) => {}}
               onRunBotWithContract={handleRunBotWithContract}
+              onStopBot={() => {
+                const runningBot = bots.find(b => b.status === 'RUNNING');
+                if (runningBot) handleStop(runningBot.id);
+                else if (activeBot) handleStop(activeBot.id);
+              }}
+              isRunning={isAnyBotRunning}
             />
 
             {/* Recent Trades Table */}

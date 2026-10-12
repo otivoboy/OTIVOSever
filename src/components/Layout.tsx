@@ -283,16 +283,19 @@ export default observer(function Layout({ children }: LayoutProps) {
     const accountsJson = localStorage.getItem('accountsList');
     
     if (!at || !accountsJson) {
-      setError("Session expired. Please login again.");
+      setActiveAccountType(type);
+      localStorage.setItem('deriv_active_account_type', type);
+      setIsAccountDropdownOpen(false);
+      botEngine.initTokenFromStorage();
       return;
     }
-    const accounts = JSON.parse(accountsJson);
-    const targetAccount = accounts.find((acc: any) => acc.account_type === type);
-    if (!targetAccount) {
-      setError(`No ${type} account found for this user.`);
-      return;
-    }
-    const accId = targetAccount.account_id || targetAccount.id;
+    let targetAccount: any;
+    try {
+      const accounts = JSON.parse(accountsJson);
+      targetAccount = accounts.find((acc: any) => acc.account_type === type);
+    } catch {}
+
+    const accId = targetAccount ? (targetAccount.account_id || targetAccount.id) : (localStorage.getItem('deriv_options_account_id') || 'CR_ACTIVE');
     
     setIsConnecting(true);
     rootStore.client.setIsConnecting(true);

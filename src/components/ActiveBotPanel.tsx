@@ -8,7 +8,10 @@ import {
   Calendar,
   Clock,
   Globe,
-  Plus
+  Plus,
+  Percent,
+  Target,
+  ShieldAlert
 } from 'lucide-react';
 import { BotRecord } from '../types/index.js';
 
@@ -19,6 +22,7 @@ interface ActiveBotPanelProps {
   onStop: (id: string) => Promise<void>;
   onEditSchedule?: () => void;
   onQuickRun?: () => void;
+  isRunningAny?: boolean;
 }
 
 export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
@@ -27,7 +31,8 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
   onResume,
   onStop,
   onEditSchedule,
-  onQuickRun
+  onQuickRun,
+  isRunningAny
 }) => {
   const [activeTab, setActiveTab] = useState<'live' | 'stats' | 'logs'>('live');
 
@@ -67,10 +72,10 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
         <div className="p-4 rounded-xl bg-[#0a141d] border border-[#132431] space-y-2.5">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[#00e676]" />
-            <span className="text-xs font-bold text-white">Risk Engine Status</span>
+            <span className="text-xs font-bold text-white">Risk & Martingale Status</span>
           </div>
           <div className="text-xs text-[#55768c] leading-relaxed">
-            Persistent risk guard active. Daily loss cutoffs, stop-losses, and tick validation will automatically enforce risk rules once a bot starts.
+            Persistent risk guard active. Martingale multipliers, Take Profit limits, and Stop Loss cutoffs will automatically enforce risk rules once a bot starts.
           </div>
         </div>
       </div>
@@ -91,13 +96,21 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
     ? Math.round((session.winCount / session.totalTrades) * 100)
     : 0;
 
+  const martingale = bot.risk.martingaleMultiplier || 2.0;
+  const tp = bot.risk.takeProfit || bot.risk.maxDailyProfit || 10.0;
+  const sl = bot.risk.stopLoss || bot.risk.maxDailyLoss || 20.0;
+
   return (
     <div className="space-y-4">
       {/* 1. Bot Header Card */}
       <div className="p-4 rounded-xl bg-[#0a141d] border border-[#132431] space-y-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#00e676]/15 border border-[#00e676]/35 flex items-center justify-center text-[#00e676] shrink-0">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+              isRunning
+                ? 'bg-red-500/10 border-red-500/40 text-red-400'
+                : 'bg-[#00e676]/15 border-[#00e676]/35 text-[#00e676]'
+            }`}>
               <Bot className="w-6 h-6" />
             </div>
             <div>
@@ -116,39 +129,53 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold text-[#00e676] bg-[#00e676]/10 border border-[#00e676]/30">
-            <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-[#00e676] animate-pulse' : 'bg-[#ffb300]'}`}></span>
+          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+            isRunning
+              ? 'text-red-400 bg-red-500/10 border-red-500/30'
+              : 'text-[#00e676] bg-[#00e676]/10 border-[#00e676]/30'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-red-400 animate-pulse' : 'bg-[#ffb300]'}`}></span>
             <span>{bot.status}</span>
           </div>
         </div>
 
-        {/* Buttons: Pause / Resume / Stop */}
+        {/* Buttons: Run (Green) vs Stop Bot (RED) */}
         <div className="grid grid-cols-2 gap-2 pt-1">
           {isRunning ? (
             <button
-              onClick={() => onPause(botId)}
-              className="py-2 px-3 rounded-lg bg-[#00e676] hover:bg-[#00c853] text-[#071118] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm shadow-[#00e676]/20 cursor-pointer"
+              onClick={() => onStop(botId)}
+              className="py-2.5 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-rose-600/30 cursor-pointer animate-pulse"
             >
-              <Pause className="w-3.5 h-3.5 fill-[#071118]" />
-              <span>Pause Bot</span>
+              <Square className="w-3.5 h-3.5 fill-white" />
+              <span>Stop Bot</span>
             </button>
           ) : (
             <button
               onClick={() => onResume(botId)}
-              className="py-2 px-3 rounded-lg bg-[#00e676] hover:bg-[#00c853] text-[#071118] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm shadow-[#00e676]/20 cursor-pointer"
+              className="py-2.5 px-3 rounded-lg bg-[#00e676] hover:bg-[#00c853] text-[#071118] font-black text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm shadow-[#00e676]/20 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-[#071118]" />
-              <span>{bot.status === 'PAUSED' ? 'Resume Bot' : 'Run Bot'}</span>
+              <span>Run Bot</span>
             </button>
           )}
 
-          <button
-            onClick={() => onStop(botId)}
-            className="py-2 px-3 rounded-lg bg-[#071118] hover:bg-[#122230] border border-[#162734] text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Square className="w-3 h-3 fill-white" />
-            <span>Stop Bot</span>
-          </button>
+          {isRunning ? (
+            <button
+              onClick={() => onPause(botId)}
+              className="py-2.5 px-3 rounded-lg bg-[#071118] hover:bg-[#122230] border border-[#162734] text-neutral-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Pause className="w-3.5 h-3.5 fill-neutral-300" />
+              <span>Pause Bot</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => onStop(botId)}
+              className="py-2.5 px-3 rounded-lg bg-[#071118] hover:bg-[#122230] border border-[#162734] text-neutral-400 font-medium text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Square className="w-3 h-3 fill-neutral-400" />
+              <span>Reset State</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -192,22 +219,39 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
       {/* Tab Content */}
       {activeTab === 'live' && (
         <div className="space-y-3">
-          {/* Risk Management Card */}
+          {/* Risk & Money Management (Martingale, TP, SL) */}
           <div className="p-3.5 rounded-xl bg-[#0a141d] border border-[#132431] space-y-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-[#00e676]" />
-                <span className="text-xs font-bold text-white">Risk Management</span>
+                <span className="text-xs font-bold text-white">Risk & Martingale Engine</span>
               </div>
               <span className="text-[10px] font-semibold text-[#00e676] px-2 py-0.5 rounded border border-[#00e676]/30 bg-[#00e676]/5">
-                Within Limits
+                Active Limits
               </span>
             </div>
+
+            {/* Quick Stats Grid */}
+            <div className="grid grid-cols-3 gap-1.5 p-2 rounded-lg bg-[#071118] border border-[#142634] text-center">
+              <div>
+                <div className="text-[9px] uppercase font-semibold text-[#55768c]">Martingale</div>
+                <div className="text-xs font-mono font-bold text-emerald-400">{martingale}x</div>
+              </div>
+              <div>
+                <div className="text-[9px] uppercase font-semibold text-[#55768c]">Take Profit (TP)</div>
+                <div className="text-xs font-mono font-bold text-emerald-400">+${tp.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-[9px] uppercase font-semibold text-[#55768c]">Stop Loss (SL)</div>
+                <div className="text-xs font-mono font-bold text-rose-400">-${sl.toFixed(2)}</div>
+              </div>
+            </div>
+
             <div className="space-y-1.5 text-xs pt-1 font-mono">
               <div className="flex justify-between">
-                <span className="text-[#55768c]">Session P/L</span>
+                <span className="text-[#55768c]">Session Realized P/L</span>
                 <span className={`font-bold ${session.realizedProfit >= 0 ? 'text-[#00e676]' : 'text-[#ff3d57]'}`}>
-                  {session.realizedProfit >= 0 ? '+' : ''}${session.realizedProfit.toFixed(2)}
+                  {session.realizedProfit >= 0 ? '+' : ''}${session.realizedProfit.toFixed(2)} USD
                 </span>
               </div>
               <div className="flex justify-between">

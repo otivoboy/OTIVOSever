@@ -151,6 +151,9 @@ export interface RiskConfig {
   stakeAmount: number;
   stakePercentage: number; // e.g. 1% of balance capped
   maxStake: number;
+  martingaleMultiplier?: number;
+  takeProfit?: number;
+  stopLoss?: number;
   maxConcurrentContracts: number;
   maxDailyLoss: number;
   maxDailyProfit: number;

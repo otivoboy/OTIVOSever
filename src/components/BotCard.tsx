@@ -222,11 +222,11 @@ export const BotCard: React.FC<BotCardProps> = ({
       <div className="mt-4 pt-3.5 border-t border-neutral-800/80 flex items-center gap-2">
         {isRunning ? (
           <button
-            onClick={() => onPause(bot.id)}
-            className="flex-1 py-2 px-3 text-xs font-bold rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            onClick={() => onStop(bot.id)}
+            className="flex-1 py-2 px-3 text-xs font-extrabold rounded-lg bg-rose-600 hover:bg-rose-500 text-white transition-all flex items-center justify-center gap-1.5 shadow-md shadow-rose-600/30 cursor-pointer animate-pulse"
           >
-            <Pause className="w-3.5 h-3.5 fill-amber-300" />
-            <span>Pause Bot</span>
+            <Square className="w-3.5 h-3.5 fill-white" />
+            <span>Stop Bot</span>
           </button>
         ) : isPaused ? (
           <button
@@ -242,7 +242,7 @@ export const BotCard: React.FC<BotCardProps> = ({
             className="flex-1 py-2 px-3 text-xs font-bold rounded-lg bg-emerald-400 hover:bg-emerald-300 text-neutral-950 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer"
           >
             <Play className="w-3.5 h-3.5 fill-neutral-950" />
-            <span>Start Cloud Worker</span>
+            <span>Run Bot</span>
           </button>
         )}
 

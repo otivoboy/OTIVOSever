@@ -8,9 +8,14 @@ import {
   ArrowDownRight,
   Zap,
   Play,
+  Square,
   CheckCircle2,
   Sliders,
-  DollarSign
+  DollarSign,
+  TrendingDown as TrendingDownIcon,
+  Percent,
+  Target,
+  ShieldAlert
 } from 'lucide-react';
 import { MarketSymbolInfo } from '../types/index.js';
 
@@ -24,13 +29,20 @@ interface ContractsSectionProps {
     barrierDigit?: number;
     growthRate?: number;
     limitOrder?: number;
+    martingaleMultiplier?: number;
+    takeProfit?: number;
+    stopLoss?: number;
   }) => Promise<void>;
+  onStopBot?: () => void;
+  isRunning?: boolean;
   markets?: MarketSymbolInfo[];
 }
 
 export const ContractsSection: React.FC<ContractsSectionProps> = ({
   onSelectContract,
   onRunBotWithContract,
+  onStopBot,
+  isRunning = false,
   markets = []
 }) => {
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -40,9 +52,14 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
   const [barrierDigit, setBarrierDigit] = useState<number>(7);
   const [growthRate, setGrowthRate] = useState<number>(2); // 1-5%
   const [limitOrderTicks, setLimitOrderTicks] = useState<number>(10);
-  const [stake, setStake] = useState<number>(2.0);
   const [selectedMarket, setSelectedMarket] = useState<string>('1HZ50V');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
+
+  // Risk, Martingale, TP and SL inputs
+  const [stake, setStake] = useState<number>(2.0);
+  const [martingaleMultiplier, setMartingaleMultiplier] = useState<number>(2.0);
+  const [takeProfit, setTakeProfit] = useState<number>(10.0);
+  const [stopLoss, setStopLoss] = useState<number>(20.0);
 
   const categories = [
     'All',
@@ -89,7 +106,10 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
         stake,
         barrierDigit: activeTile.requiresBarrier ? barrierDigit : undefined,
         growthRate: activeTile.isAccu ? growthRate : undefined,
-        limitOrder: activeTile.isAccu ? limitOrderTicks : undefined
+        limitOrder: activeTile.isAccu ? limitOrderTicks : undefined,
+        martingaleMultiplier,
+        takeProfit,
+        stopLoss
       });
     } finally {
       setIsLaunching(false);
@@ -103,9 +123,17 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
           <span>Deriv Contract Execution Engine</span>
           <span className="text-[11px] font-normal text-[#5c7e94]">(Configure & Run)</span>
         </h3>
-        <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-          Selected: {activeTile.label}
-        </span>
+        <div className="flex items-center gap-2">
+          {isRunning && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold text-red-400 bg-red-500/10 border border-red-500/30 animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
+              TRADING ACTIVE
+            </span>
+          )}
+          <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+            Selected: {activeTile.label}
+          </span>
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3">
@@ -280,7 +308,88 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
           </div>
         )}
 
-        {/* Execution Strip: Market + Stake + Run Bot Button */}
+        {/* 4. MARTINGALE, TAKE PROFIT (TP), STOP LOSS (SL) CONFIGURATION STRIP */}
+        <div className="p-3 rounded-lg bg-[#0a151f] border border-[#162938] space-y-2">
+          <div className="text-[11px] font-bold text-white flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <ShieldAlert className="w-3.5 h-3.5" />
+              Risk Strategy: Martingale & Profit Protections
+            </span>
+            <span className="text-[10px] text-[#55768c]">Auto Money Management</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {/* Martingale Multiplier Input */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] text-[#7392a5] font-semibold uppercase flex items-center gap-1">
+                  <Percent className="w-3 h-3 text-emerald-400" /> Martingale Factor
+                </label>
+                <span className="text-[10px] font-mono text-emerald-400 font-bold">{martingaleMultiplier}x</span>
+              </div>
+              <div className="flex gap-1">
+                {[1.0, 1.5, 2.0, 2.5].map((multiplier) => (
+                  <button
+                    key={multiplier}
+                    type="button"
+                    onClick={() => setMartingaleMultiplier(multiplier)}
+                    className={`flex-1 py-1 text-[10px] font-mono font-bold rounded cursor-pointer transition-all ${
+                      martingaleMultiplier === multiplier
+                        ? 'bg-emerald-500 text-[#071118]'
+                        : 'bg-[#0d1c26] text-neutral-300 hover:bg-[#142a3a] border border-[#162734]'
+                    }`}
+                  >
+                    {multiplier === 1.0 ? 'Off' : `${multiplier}x`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Take Profit (TP) Input */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] text-[#7392a5] font-semibold uppercase flex items-center gap-1">
+                  <Target className="w-3 h-3 text-emerald-400" /> Take Profit (TP)
+                </label>
+                <span className="text-[10px] font-mono text-emerald-400 font-bold">+${takeProfit.toFixed(2)}</span>
+              </div>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={takeProfit}
+                  onChange={(e) => setTakeProfit(Math.max(1, parseFloat(e.target.value) || 1))}
+                  className="w-full bg-[#071118] border border-[#142634] rounded-lg pl-6 pr-2 py-1 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500 font-bold"
+                />
+                <DollarSign className="w-3 h-3 text-emerald-500 absolute left-2 top-2" />
+              </div>
+            </div>
+
+            {/* Stop Loss (SL) Input */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] text-[#7392a5] font-semibold uppercase flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3 text-rose-400" /> Stop Loss (SL)
+                </label>
+                <span className="text-[10px] font-mono text-rose-400 font-bold">-${stopLoss.toFixed(2)}</span>
+              </div>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={stopLoss}
+                  onChange={(e) => setStopLoss(Math.max(1, parseFloat(e.target.value) || 1))}
+                  className="w-full bg-[#071118] border border-[#142634] rounded-lg pl-6 pr-2 py-1 text-xs font-mono text-rose-400 focus:outline-none focus:border-rose-500 font-bold"
+                />
+                <DollarSign className="w-3 h-3 text-rose-500 absolute left-2 top-2" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Execution Strip: Market + Stake + Dynamic Run / Red Stop Button */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-[#132431]">
           {/* Market Selection */}
           <div>
@@ -311,7 +420,7 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
           {/* Stake Input */}
           <div>
             <label className="text-[10px] text-[#55768c] font-semibold uppercase block mb-1">
-              Stake Amount ($ USD)
+              Initial Stake ($ USD)
             </label>
             <div className="relative">
               <input
@@ -326,17 +435,28 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
             </div>
           </div>
 
-          {/* Action: Run Bot Immediately */}
+          {/* Action: Run Bot or RED Stop Bot Button */}
           <div className="flex items-end">
-            <button
-              type="button"
-              onClick={handleLaunch}
-              disabled={isLaunching}
-              className="w-full py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[#071118] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50 cursor-pointer"
-            >
-              <Play className="w-3.5 h-3.5 fill-[#071118]" />
-              <span>{isLaunching ? 'DEPLOYING...' : `RUN BOT WITH ${activeTile.label.toUpperCase()}`}</span>
-            </button>
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={onStopBot}
+                className="w-full py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-rose-600/30 active:scale-95 cursor-pointer animate-pulse"
+              >
+                <Square className="w-3.5 h-3.5 fill-white" />
+                <span>STOP BOT (RUNNING)</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleLaunch}
+                disabled={isLaunching}
+                className="w-full py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[#071118] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-[#071118]" />
+                <span>{isLaunching ? 'STARTING...' : `RUN BOT WITH ${activeTile.label.toUpperCase()}`}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
