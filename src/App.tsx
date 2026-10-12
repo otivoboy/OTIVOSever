@@ -115,6 +115,26 @@ export default observer(function App() {
         rootStore.client.setCurrency(primary.currency);
         rootStore.client.setAccountType(primary.accountType);
         rootStore.client.setIsConnected(true);
+
+        let token =
+          localStorage.getItem(`token_${primary.accountNumber}`) ||
+          localStorage.getItem('deriv_api_token') ||
+          localStorage.getItem('deriv_oauth_access_token') ||
+          '';
+        if (!token && (primary as any).tokenEncrypted?.startsWith('enc_')) {
+          try {
+            token = atob((primary as any).tokenEncrypted.replace('enc_', ''));
+          } catch {}
+        }
+
+        if (token) {
+          localStorage.setItem('deriv_options_account_id', primary.accountNumber);
+          localStorage.setItem('deriv_active_account_type', primary.accountType);
+          localStorage.setItem(`token_${primary.accountNumber}`, token);
+          localStorage.setItem('deriv_api_token', token);
+          localStorage.setItem('deriv_user_token', token);
+          botEngine.establishConnection(token, primary.accountNumber, localStorage.getItem('deriv_oauth_access_token') ? 'oauth' : 'legacy').catch(() => {});
+        }
       }
     } catch (err) {
       console.warn('[APP] Initial load from remote API failed, operating in client mode:', err);
@@ -339,6 +359,21 @@ export default observer(function App() {
     stopLoss?: number;
   }) => {
     const activeAcc = accounts.find(a => a.isActive) || accounts[0];
+    if (activeAcc) {
+      let token =
+        localStorage.getItem(`token_${activeAcc.accountNumber}`) ||
+        localStorage.getItem('deriv_api_token') ||
+        localStorage.getItem('deriv_oauth_access_token') ||
+        '';
+      if (!token && (activeAcc as any).tokenEncrypted?.startsWith('enc_')) {
+        try {
+          token = atob((activeAcc as any).tokenEncrypted.replace('enc_', ''));
+        } catch {}
+      }
+      if (token) {
+        botEngine.setToken(token);
+      }
+    }
     const botName = `OTIVO ${params.subtypes[0]} Bot`;
     const botData: Partial<BotRecord> = {
       name: botName,
@@ -459,7 +494,28 @@ export default observer(function App() {
       rootStore.client.setBalance(current.balance);
       rootStore.client.setCurrency(current.currency);
       rootStore.client.setAccountType(current.accountType);
-      botEngine.initTokenFromStorage();
+
+      let token =
+        localStorage.getItem(`token_${current.accountNumber}`) ||
+        localStorage.getItem('deriv_api_token') ||
+        localStorage.getItem('deriv_oauth_access_token') ||
+        '';
+      if (!token && (current as any).tokenEncrypted?.startsWith('enc_')) {
+        try {
+          token = atob((current as any).tokenEncrypted.replace('enc_', ''));
+        } catch {}
+      }
+
+      if (token) {
+        localStorage.setItem('deriv_options_account_id', current.accountNumber);
+        localStorage.setItem('deriv_active_account_type', current.accountType);
+        localStorage.setItem(`token_${current.accountNumber}`, token);
+        localStorage.setItem('deriv_api_token', token);
+        localStorage.setItem('deriv_user_token', token);
+        await botEngine.establishConnection(token, current.accountNumber, localStorage.getItem('deriv_oauth_access_token') ? 'oauth' : 'legacy');
+      } else {
+        botEngine.initTokenFromStorage();
+      }
     }
   };
 
@@ -469,7 +525,14 @@ export default observer(function App() {
     accountType: 'demo' | 'real';
     currency?: string;
   }) => {
-    botEngine.setToken(params.token);
+    const rawTok = params.token.trim();
+    const accNum = params.accountNumber.trim().toUpperCase();
+    localStorage.setItem('deriv_options_account_id', accNum);
+    localStorage.setItem('deriv_active_account_type', params.accountType);
+    localStorage.setItem(`token_${accNum}`, rawTok);
+    localStorage.setItem('deriv_api_token', rawTok);
+    localStorage.setItem('deriv_user_token', rawTok);
+
     const created = await api.connectAccount(params);
     setAccounts(prev => [created, ...prev.map(a => ({ ...a, isActive: false }))]);
     rootStore.client.setLoginId(created.accountNumber);
@@ -477,6 +540,8 @@ export default observer(function App() {
     rootStore.client.setCurrency(created.currency);
     rootStore.client.setAccountType(created.accountType);
     rootStore.client.setIsConnected(true);
+
+    await botEngine.establishConnection(rawTok, created.accountNumber, 'legacy');
   };
 
   const handleDisconnectAccount = async (id: string) => {

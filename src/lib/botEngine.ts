@@ -81,15 +81,18 @@ class BotEngine {
   public initTokenFromStorage(): string {
     const loginId = rootStore.client.loginId || localStorage.getItem('deriv_options_account_id') || '';
     const token =
+      (loginId ? localStorage.getItem(`token_${loginId}`) : null) ||
       localStorage.getItem('deriv_api_token') ||
       localStorage.getItem('deriv_user_token') ||
-      (loginId ? localStorage.getItem(`token_${loginId}`) : null) ||
       localStorage.getItem('deriv_legacy_token') ||
       localStorage.getItem('deriv_oauth_access_token') ||
       '';
 
     if (token) {
       this.activeToken = token.trim();
+      if (loginId) {
+        this.authorizedLoginId = loginId;
+      }
       this.ensureWebSocketConnection();
     } else {
       // Also check if we can connect via OAuth OTP endpoint
@@ -111,12 +114,14 @@ class BotEngine {
     localStorage.setItem('deriv_api_token', trimmed);
     if (rootStore.client.loginId) {
       localStorage.setItem(`token_${rootStore.client.loginId}`, trimmed);
+      this.authorizedLoginId = rootStore.client.loginId;
     }
     // Reconnect with the new token
     if (this.ws) {
       try { this.ws.close(); } catch {}
       this.ws = null;
     }
+    this.isRealAuthorized = false;
     this.currentWsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=69546';
     this.ensureWebSocketConnection();
   }
@@ -140,6 +145,7 @@ class BotEngine {
             try { this.ws.close(); } catch {}
             this.ws = null;
           }
+          this.isRealAuthorized = false;
           return this.ensureWebSocketConnection();
         }
       }
@@ -152,8 +158,9 @@ class BotEngine {
   // 1. Establish Deriv Live WebSocket
   public ensureWebSocketConnection(): Promise<boolean> {
     return new Promise((resolve) => {
+      const targetLoginId = rootStore.client.loginId;
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        if (this.isRealAuthorized) {
+        if (this.isRealAuthorized && (!targetLoginId || this.authorizedLoginId === targetLoginId)) {
           return resolve(true);
         }
         if (this.activeToken) {
@@ -295,43 +302,94 @@ class BotEngine {
       const contractId = poc.contract_id?.toString();
       const openTrade = contractId ? this.openBrokerContracts.get(contractId) : undefined;
 
-      if (openTrade && (poc.is_sold === 1 || poc.status === 'won' || poc.status === 'lost')) {
-        this.openBrokerContracts.delete(contractId);
-        const isWin = poc.status === 'won' || poc.profit > 0;
-        const realProfit = poc.profit;
-        const exitSpot = poc.exit_tick || poc.barrier || openTrade.entrySpot;
+      if (openTrade) {
+        if (poc.current_spot || poc.current_spot_display_value) {
+          openTrade.exitSpot = parseFloat(poc.current_spot_display_value || poc.current_spot);
+        }
+        if (poc.profit !== undefined) {
+          openTrade.profit = parseFloat(poc.profit);
+        }
 
-        this.handleTradeSettled(openTrade, isWin, realProfit, exitSpot, true);
+        const isDefinitive = ['won', 'lost', 'expired', 'out', 'closed'].includes(poc.status);
+        const isCompleted = poc.is_completed === 1;
+        const isSettleable = poc.is_settleable === 1;
+        const isSold = poc.is_sold === 1;
+        const isFinished = isDefinitive || isCompleted || isSettleable || isSold;
+
+        if (isFinished) {
+          this.openBrokerContracts.delete(contractId);
+          const isWin = poc.status === 'won' || parseFloat(poc.profit || '0') > 0;
+          const realProfit = parseFloat(poc.profit || '0');
+          const exitSpot = parseFloat(poc.exit_tick_display_value || poc.exit_tick || poc.exit_spot || poc.current_spot_display_value || openTrade.entrySpot);
+
+          this.handleTradeSettled(openTrade, isWin, realProfit, exitSpot, true);
+        }
       }
     }
   }
 
-  // 1b. REST connection ping to sync accounts and live balance
-  async establishConnection(accessToken: string, accountId: string, _type = 'oauth'): Promise<void> {
+  // 1b. REST / WebSocket connection to sync accounts and live broker balance
+  async establishConnection(token: string, accountId?: string, connectionType: 'oauth' | 'legacy' = 'oauth'): Promise<void> {
     rootStore.client.setIsConnecting(true);
+    const activeTok = (token || localStorage.getItem('deriv_oauth_access_token') || localStorage.getItem('deriv_api_token') || localStorage.getItem('deriv_user_token') || '').trim();
+    const activeAcc = (accountId || localStorage.getItem('deriv_options_account_id') || rootStore.client.loginId || '').trim();
+
+    this.activeToken = activeTok;
+    if (activeAcc) {
+      this.authorizedLoginId = activeAcc;
+      rootStore.client.setLoginId(activeAcc);
+      localStorage.setItem('deriv_options_account_id', activeAcc);
+      const isDemo = activeAcc.toUpperCase().startsWith('VR');
+      rootStore.client.setAccountType(isDemo ? 'demo' : 'real');
+      localStorage.setItem('deriv_active_account_type', isDemo ? 'demo' : 'real');
+      if (activeTok) {
+        localStorage.setItem(`token_${activeAcc}`, activeTok);
+      }
+    }
+    if (activeTok) {
+      localStorage.setItem('deriv_api_token', activeTok);
+      localStorage.setItem('deriv_user_token', activeTok);
+    }
+
+    // Force refresh WebSocket to authorize specifically on this connected account
+    if (this.ws) {
+      try { this.ws.close(); } catch {}
+      this.ws = null;
+    }
+    this.isRealAuthorized = false;
+    this.currentWsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=69546';
+
     try {
-      // 1. Fetch official account balances via REST
-      const res = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Deriv-App-ID': '69546'
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const accs = data.data || [];
-        const current = accs.find((a: any) => a.account_id === accountId) || accs[0];
-        if (current) {
-          rootStore.client.setBalance(current.balance ?? 0);
-          rootStore.client.setCurrency(current.currency || 'USD');
-          rootStore.client.setLoginId(current.account_id);
-          rootStore.client.setAccountType(current.account_type === 'demo' ? 'demo' : 'real');
+      if (connectionType === 'oauth' && activeTok && activeAcc) {
+        try {
+          const res = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+            headers: {
+              'Authorization': `Bearer ${activeTok}`,
+              'Deriv-App-ID': '69546'
+            }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const accs = data.data || [];
+            const current = accs.find((a: any) => a.account_id === activeAcc) || accs[0];
+            if (current) {
+              rootStore.client.setBalance(current.balance ?? 0);
+              rootStore.client.setCurrency(current.currency || 'USD');
+              rootStore.client.setLoginId(current.account_id);
+              rootStore.client.setAccountType(current.account_type === 'demo' ? 'demo' : 'real');
+            }
+          }
+        } catch {}
+
+        const otpConnected = await this.connectViaOauthOtp(activeTok, activeAcc);
+        if (otpConnected) {
+          rootStore.client.setIsConnected(true);
+          return;
         }
       }
-      rootStore.client.setIsConnected(true);
 
-      // 2. Connect live WebSocket via OTP for direct broker purchasing
-      await this.connectViaOauthOtp(accessToken, accountId);
+      await this.ensureWebSocketConnection();
+      rootStore.client.setIsConnected(true);
     } catch (err) {
       console.warn('[DERIV] Establish connection error:', err);
       rootStore.client.setIsConnected(true);
@@ -436,16 +494,39 @@ class BotEngine {
           }, 7000);
         });
 
-        // Send official Deriv buy command
+        // Construct parameters according to Deriv WebSocket Buy specification
+        const buyParameters: Record<string, any> = {
+          amount: payload.amount,
+          basis: 'stake',
+          contract_type: payload.contract_type,
+          currency: payload.currency || rootStore.client.currency || 'USD',
+          symbol: payload.underlying_symbol || intent.symbol,
+          duration: payload.duration || 1,
+          duration_unit: payload.duration_unit || 't'
+        };
+        if (payload.barrier) {
+          buyParameters.barrier = payload.barrier;
+        }
+        if (payload.growth_rate) {
+          delete buyParameters.duration;
+          delete buyParameters.duration_unit;
+          buyParameters.growth_rate = payload.growth_rate;
+        }
+        if (payload.limit_order) {
+          buyParameters.limit_order = payload.limit_order;
+        }
+
+        // Send official Deriv direct buy command on the connected account
         this.ws.send(JSON.stringify({
           buy: 1,
           price: maxPrice,
-          parameters: payload,
+          parameters: buyParameters,
           subscribe: 1,
           req_id: buyReqId,
           passthrough: {
             botId: intent.batchId,
-            reqId: buyReqId
+            reqId: buyReqId,
+            type: intent.type
           }
         }));
 
@@ -461,7 +542,7 @@ class BotEngine {
       this.initTokenFromStorage();
       this.botCallbacks?.onLog?.({
         level: 'WARN',
-        message: `[BROKER AUTHORIZATION NEEDED] Real trade execution requires an authorized Deriv API token for ${rootStore.client.loginId || 'your account'}. Please provide your token in Deriv Accounts modal.`
+        message: `[BROKER AUTHORIZATION NEEDED] Connecting and authorizing Deriv live broker session for ${rootStore.client.loginId || 'connected account'}...`
       });
     }
 
@@ -487,14 +568,17 @@ class BotEngine {
     const bot = runner?.bot || (intent.batchId ? this.activeBots.get(intent.batchId) : undefined);
 
     const isRealExecution = !!realBrokerOrder;
+    const activeLoginId = this.authorizedLoginId || rootStore.client.loginId || 'CR_ACTIVE';
+    const activeAccountType = rootStore.client.accountType || (activeLoginId.toUpperCase().startsWith('VR') ? 'demo' : 'real');
+
     const tradeRecord: TradeRecord = {
       id: tradeId,
       botId: intent.batchId || 'bot_manual',
       botName: bot ? bot.name : 'OTIVO AI Universal Bot',
       userId: 'user_master_1',
-      derivAccountId: rootStore.client.loginId || 'CR_ACTIVE',
-      accountMode: rootStore.client.accountType || 'real',
-      symbol: payload.underlying_symbol,
+      derivAccountId: activeLoginId,
+      accountMode: activeAccountType,
+      symbol: payload.underlying_symbol || intent.symbol,
       contractType: payload.contract_type,
       contractId,
       purchaseReqId: buyReqId,
@@ -507,9 +591,9 @@ class BotEngine {
       barrier: payload.barrier,
       duration: payload.duration || 1,
       durationUnit: payload.duration_unit || 't',
-      strategyUsed: `${payload.contract_type} ${isRealExecution ? '(REAL DERIV CONTRACT)' : '(UNCONFIRMED)'}`,
+      strategyUsed: `${payload.contract_type} ${isRealExecution ? `(${activeAccountType.toUpperCase()} DERIV CONTRACT)` : '(UNCONFIRMED)'}`,
       notes: isRealExecution
-        ? `Real Order #${contractId} confirmed on Deriv broker (${payload.underlying_symbol})`
+        ? `Real Order #${contractId} confirmed on Deriv broker (${payload.underlying_symbol}) on ${activeLoginId}`
         : `Order placed on ${payload.underlying_symbol} ${payload.contract_type}`
     };
 
