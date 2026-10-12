@@ -1,27 +1,49 @@
 import React from 'react';
 import { TradeRecord } from '../types/index.js';
+import { RotateCcw, Trash2 } from 'lucide-react';
 
 interface RecentTradesSectionProps {
   trades: TradeRecord[];
   onViewAll?: () => void;
+  onResetHistory?: () => void;
 }
 
-export const RecentTradesSection: React.FC<RecentTradesSectionProps> = ({ trades, onViewAll }) => {
+export const RecentTradesSection: React.FC<RecentTradesSectionProps> = ({
+  trades,
+  onViewAll,
+  onResetHistory
+}) => {
   const displayTrades = trades.slice(0, 6);
 
   return (
     <div className="p-4 rounded-xl bg-[#0a141d] border border-[#132431] flex flex-col justify-between">
       <div>
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs font-bold text-white">Recent Trades</h3>
-          {trades.length > 0 && (
-            <button
-              onClick={onViewAll}
-              className="text-[11px] font-medium text-[#00e676] hover:underline cursor-pointer"
-            >
-              View All
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            <h3 className="text-xs font-bold text-white">Recent Trades</h3>
+            <span className="text-[10px] text-[#55768c] font-mono">({trades.length} recorded)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {trades.length > 0 && onResetHistory && (
+              <button
+                type="button"
+                onClick={onResetHistory}
+                className="flex items-center gap-1 text-[11px] font-semibold text-rose-400 hover:text-rose-300 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                title="Clear Recent Trade History"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset History</span>
+              </button>
+            )}
+            {trades.length > 0 && onViewAll && (
+              <button
+                onClick={onViewAll}
+                className="text-[11px] font-medium text-[#00e676] hover:underline cursor-pointer"
+              >
+                View All
+              </button>
+            )}
+          </div>
         </div>
 
         {displayTrades.length === 0 ? (

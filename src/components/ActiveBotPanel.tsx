@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Bot,
   Pause,
@@ -11,9 +11,12 @@ import {
   Plus,
   Percent,
   Target,
-  ShieldAlert
+  ShieldAlert,
+  DollarSign,
+  Key
 } from 'lucide-react';
 import { BotRecord } from '../types/index.js';
+import { botEngine } from '../lib/botEngine.js';
 
 interface ActiveBotPanelProps {
   bot?: BotRecord;
@@ -23,6 +26,13 @@ interface ActiveBotPanelProps {
   onEditSchedule?: () => void;
   onQuickRun?: () => void;
   isRunningAny?: boolean;
+  onUpdateRisk?: (settings: {
+    baseStake?: number;
+    martingaleMultiplier?: number;
+    takeProfit?: number;
+    stopLoss?: number;
+  }) => void;
+  onOpenAccountModal?: () => void;
 }
 
 export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
@@ -32,9 +42,49 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
   onStop,
   onEditSchedule,
   onQuickRun,
-  isRunningAny
+  isRunningAny = false,
+  onUpdateRisk,
+  onOpenAccountModal
 }) => {
   const [activeTab, setActiveTab] = useState<'live' | 'stats' | 'logs'>('live');
+
+  // Interactive Risk Inputs
+  const [stakeInput, setStakeInput] = useState<number>(bot?.risk.stakeAmount || 2.0);
+  const [martingaleInput, setMartingaleInput] = useState<number>(bot?.risk.martingaleMultiplier || 2.0);
+  const [tpInput, setTpInput] = useState<number>(bot?.risk.takeProfit || bot?.risk.maxDailyProfit || 10.0);
+  const [slInput, setSlInput] = useState<number>(bot?.risk.stopLoss || bot?.risk.maxDailyLoss || 20.0);
+  const [isRiskSaved, setIsRiskSaved] = useState(false);
+
+  // Sync inputs when bot changes
+  useEffect(() => {
+    if (bot) {
+      setStakeInput(bot.risk.stakeAmount || 2.0);
+      setMartingaleInput(bot.risk.martingaleMultiplier || 2.0);
+      setTpInput(bot.risk.takeProfit || bot.risk.maxDailyProfit || 10.0);
+      setSlInput(bot.risk.stopLoss || bot.risk.maxDailyLoss || 20.0);
+    }
+  }, [bot?.id]);
+
+  const handleApplyRisk = () => {
+    if (bot) {
+      botEngine.updateRiskSettings(bot.id, {
+        baseStake: stakeInput,
+        martingaleMultiplier: martingaleInput,
+        takeProfit: tpInput,
+        stopLoss: slInput
+      });
+      onUpdateRisk?.({
+        baseStake: stakeInput,
+        martingaleMultiplier: martingaleInput,
+        takeProfit: tpInput,
+        stopLoss: slInput
+      });
+      setIsRiskSaved(true);
+      setTimeout(() => setIsRiskSaved(false), 2000);
+    }
+  };
+
+  const isRunning = bot?.status === 'RUNNING';
 
   if (!bot) {
     return (
@@ -44,19 +94,32 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
             <Bot className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-white">No Cloud Bot Deployed</h3>
+            <h3 className="text-sm font-bold text-white">Cloud Bot Engine</h3>
             <p className="text-xs text-[#55768c] mt-1 max-w-[260px] mx-auto">
-              Deploy a bot to run 24/7 independently on the persistent cloud trading server.
+              Run automated 24/7 contracts on Deriv with custom Martingale, Take Profit, and Stop Loss.
             </p>
           </div>
           <div className="space-y-2">
             {onQuickRun && (
               <button
-                onClick={onQuickRun}
-                className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-[#071118] font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shadow-emerald-500/20 active:scale-95 cursor-pointer"
+                onClick={isRunningAny ? () => onStop('') : onQuickRun}
+                className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 cursor-pointer ${
+                  isRunningAny
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 animate-pulse'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-[#071118] shadow-emerald-500/20'
+                }`}
               >
-                <Play className="w-4 h-4 fill-[#071118]" />
-                <span>Start Quick Bot (Volatility 50 1s)</span>
+                {isRunningAny ? (
+                  <>
+                    <Square className="w-4 h-4 fill-white" />
+                    <span>STOP BOT (RUNNING)</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 fill-[#071118]" />
+                    <span>Start Quick Bot (Volatility 50 1s)</span>
+                  </>
+                )}
               </button>
             )}
             <button
@@ -72,17 +135,16 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
         <div className="p-4 rounded-xl bg-[#0a141d] border border-[#132431] space-y-2.5">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[#00e676]" />
-            <span className="text-xs font-bold text-white">Risk & Martingale Status</span>
+            <span className="text-xs font-bold text-white">Risk & Martingale Engine</span>
           </div>
           <div className="text-xs text-[#55768c] leading-relaxed">
-            Persistent risk guard active. Martingale multipliers, Take Profit limits, and Stop Loss cutoffs will automatically enforce risk rules once a bot starts.
+            Automatic stake compounding, profit guards, and emergency loss cutoffs ensure high capital protection.
           </div>
         </div>
       </div>
     );
   }
 
-  const isRunning = bot.status === 'RUNNING';
   const botId = bot.id;
   const session = bot.currentTradeSession || {
     totalTrades: 0,
@@ -96,10 +158,6 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
     ? Math.round((session.winCount / session.totalTrades) * 100)
     : 0;
 
-  const martingale = bot.risk.martingaleMultiplier || 2.0;
-  const tp = bot.risk.takeProfit || bot.risk.maxDailyProfit || 10.0;
-  const sl = bot.risk.stopLoss || bot.risk.maxDailyLoss || 20.0;
-
   return (
     <div className="space-y-4">
       {/* 1. Bot Header Card */}
@@ -108,7 +166,7 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
           <div className="flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
               isRunning
-                ? 'bg-red-500/10 border-red-500/40 text-red-400'
+                ? 'bg-rose-500/15 border-rose-500/40 text-rose-400'
                 : 'bg-[#00e676]/15 border-[#00e676]/35 text-[#00e676]'
             }`}>
               <Bot className="w-6 h-6" />
@@ -131,31 +189,31 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
 
           <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
             isRunning
-              ? 'text-red-400 bg-red-500/10 border-red-500/30'
+              ? 'text-rose-400 bg-rose-500/15 border-rose-500/35 animate-pulse'
               : 'text-[#00e676] bg-[#00e676]/10 border-[#00e676]/30'
           }`}>
-            <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-red-400 animate-pulse' : 'bg-[#ffb300]'}`}></span>
+            <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-rose-400' : 'bg-[#ffb300]'}`}></span>
             <span>{bot.status}</span>
           </div>
         </div>
 
-        {/* Buttons: Run (Green) vs Stop Bot (RED) */}
+        {/* Buttons: Run Bot (Green) transforms into STOP BOT (RED) when running */}
         <div className="grid grid-cols-2 gap-2 pt-1">
           {isRunning ? (
             <button
               onClick={() => onStop(botId)}
-              className="py-2.5 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-rose-600/30 cursor-pointer animate-pulse"
+              className="py-2.5 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-rose-600/30 cursor-pointer animate-pulse active:scale-95"
             >
               <Square className="w-3.5 h-3.5 fill-white" />
-              <span>Stop Bot</span>
+              <span>STOP BOT</span>
             </button>
           ) : (
             <button
               onClick={() => onResume(botId)}
-              className="py-2.5 px-3 rounded-lg bg-[#00e676] hover:bg-[#00c853] text-[#071118] font-black text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm shadow-[#00e676]/20 cursor-pointer"
+              className="py-2.5 px-3 rounded-lg bg-[#00e676] hover:bg-[#00c853] text-[#071118] font-black text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm shadow-[#00e676]/20 cursor-pointer active:scale-95"
             >
               <Play className="w-3.5 h-3.5 fill-[#071118]" />
-              <span>Run Bot</span>
+              <span>RUN BOT</span>
             </button>
           )}
 
@@ -219,35 +277,118 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
       {/* Tab Content */}
       {activeTab === 'live' && (
         <div className="space-y-3">
-          {/* Risk & Money Management (Martingale, TP, SL) */}
-          <div className="p-3.5 rounded-xl bg-[#0a141d] border border-[#132431] space-y-2.5">
+          {/* Risk, Martingale, TP and SL Editable Inputs */}
+          <div className="p-3.5 rounded-xl bg-[#0a141d] border border-[#132431] space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-[#00e676]" />
-                <span className="text-xs font-bold text-white">Risk & Martingale Engine</span>
+                <span className="text-xs font-bold text-white">Risk Controls & Money Management</span>
               </div>
-              <span className="text-[10px] font-semibold text-[#00e676] px-2 py-0.5 rounded border border-[#00e676]/30 bg-[#00e676]/5">
-                Active Limits
-              </span>
+              <button
+                type="button"
+                onClick={handleApplyRisk}
+                className="text-[10px] font-bold text-[#071118] bg-emerald-400 hover:bg-emerald-300 px-2 py-0.5 rounded cursor-pointer transition-colors"
+              >
+                {isRiskSaved ? 'Saved!' : 'Apply Risk'}
+              </button>
             </div>
 
-            {/* Quick Stats Grid */}
-            <div className="grid grid-cols-3 gap-1.5 p-2 rounded-lg bg-[#071118] border border-[#142634] text-center">
-              <div>
-                <div className="text-[9px] uppercase font-semibold text-[#55768c]">Martingale</div>
-                <div className="text-xs font-mono font-bold text-emerald-400">{martingale}x</div>
+            {/* Editable Grid for Stake, Martingale, TP, SL */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {/* Base Stake Input */}
+              <div className="p-2 rounded-lg bg-[#071118] border border-[#142634] space-y-1">
+                <label className="text-[10px] text-[#55768c] font-semibold uppercase flex items-center gap-1">
+                  <DollarSign className="w-3 h-3 text-emerald-400" /> Initial Stake
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0.35"
+                  value={stakeInput}
+                  onChange={(e) => setStakeInput(Math.max(0.35, parseFloat(e.target.value) || 0.35))}
+                  className="w-full bg-[#0a141d] border border-[#162734] rounded px-2 py-1 text-xs font-mono font-bold text-white focus:outline-none focus:border-emerald-500"
+                />
               </div>
-              <div>
-                <div className="text-[9px] uppercase font-semibold text-[#55768c]">Take Profit (TP)</div>
-                <div className="text-xs font-mono font-bold text-emerald-400">+${tp.toFixed(2)}</div>
+
+              {/* Martingale Multiplier Input */}
+              <div className="p-2 rounded-lg bg-[#071118] border border-[#142634] space-y-1">
+                <label className="text-[10px] text-[#55768c] font-semibold uppercase flex items-center gap-1">
+                  <Percent className="w-3 h-3 text-emerald-400" /> Martingale Factor
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="1.0"
+                  max="5.0"
+                  value={martingaleInput}
+                  onChange={(e) => setMartingaleInput(Math.max(1.0, parseFloat(e.target.value) || 1.0))}
+                  className="w-full bg-[#0a141d] border border-[#162734] rounded px-2 py-1 text-xs font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
+                />
               </div>
-              <div>
-                <div className="text-[9px] uppercase font-semibold text-[#55768c]">Stop Loss (SL)</div>
-                <div className="text-xs font-mono font-bold text-rose-400">-${sl.toFixed(2)}</div>
+
+              {/* Take Profit (TP) Input */}
+              <div className="p-2 rounded-lg bg-[#071118] border border-[#142634] space-y-1">
+                <label className="text-[10px] text-[#55768c] font-semibold uppercase flex items-center gap-1">
+                  <Target className="w-3 h-3 text-emerald-400" /> Take Profit (TP)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={tpInput}
+                    onChange={(e) => setTpInput(Math.max(1, parseFloat(e.target.value) || 1))}
+                    className="w-full bg-[#0a141d] border border-[#162734] rounded pl-5 pr-2 py-1 text-xs font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
+                  />
+                  <span className="absolute left-1.5 top-1 text-emerald-500 font-mono text-xs">$</span>
+                </div>
+              </div>
+
+              {/* Stop Loss (SL) Input */}
+              <div className="p-2 rounded-lg bg-[#071118] border border-[#142634] space-y-1">
+                <label className="text-[10px] text-[#55768c] font-semibold uppercase flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3 text-rose-400" /> Stop Loss (SL)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={slInput}
+                    onChange={(e) => setSlInput(Math.max(1, parseFloat(e.target.value) || 1))}
+                    className="w-full bg-[#0a141d] border border-[#162734] rounded pl-5 pr-2 py-1 text-xs font-mono font-bold text-rose-400 focus:outline-none focus:border-rose-500"
+                  />
+                  <span className="absolute left-1.5 top-1 text-rose-500 font-mono text-xs">$</span>
+                </div>
               </div>
             </div>
 
-            <div className="space-y-1.5 text-xs pt-1 font-mono">
+            {/* Martingale Quick Preset Pills */}
+            <div className="flex items-center gap-1 pt-0.5">
+              <span className="text-[9px] text-[#55768c] uppercase font-bold shrink-0">Preset:</span>
+              {[1.0, 1.5, 2.0, 2.1, 2.5].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => {
+                    setMartingaleInput(preset);
+                    if (bot) {
+                      botEngine.updateRiskSettings(bot.id, { martingaleMultiplier: preset });
+                    }
+                  }}
+                  className={`flex-1 py-0.5 text-[9px] font-mono font-bold rounded cursor-pointer transition-colors ${
+                    martingaleInput === preset
+                      ? 'bg-emerald-500 text-[#071118]'
+                      : 'bg-[#071118] text-neutral-300 hover:bg-[#142634] border border-[#162734]'
+                  }`}
+                >
+                  {preset === 1.0 ? '1x Off' : `${preset}x`}
+                </button>
+              ))}
+            </div>
+
+            {/* Live Session Status */}
+            <div className="space-y-1.5 text-xs pt-1.5 border-t border-[#142634] font-mono">
               <div className="flex justify-between">
                 <span className="text-[#55768c]">Session Realized P/L</span>
                 <span className={`font-bold ${session.realizedProfit >= 0 ? 'text-[#00e676]' : 'text-[#ff3d57]'}`}>
@@ -268,6 +409,28 @@ export const ActiveBotPanel: React.FC<ActiveBotPanelProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Deriv Real Account Notice / Token Connect helper */}
+          {!botEngine.isRealAuthorized && (
+            <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-800/40 space-y-2 text-xs">
+              <div className="flex items-center gap-2 text-amber-300 font-bold">
+                <Key className="w-3.5 h-3.5 text-amber-400" />
+                <span>Deriv Live Broker Authorization</span>
+              </div>
+              <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                To execute live trades with real money on Deriv, provide your API Token in accounts modal.
+              </p>
+              {onOpenAccountModal && (
+                <button
+                  type="button"
+                  onClick={onOpenAccountModal}
+                  className="w-full py-1.5 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Manage Deriv Accounts & Tokens
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Bot Schedule Card */}
           <div className="p-3.5 rounded-xl bg-[#0a141d] border border-[#132431] space-y-2.5">

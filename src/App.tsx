@@ -482,6 +482,37 @@ export default observer(function App() {
     setAccounts(updated);
   };
 
+  const handleResetHistory = () => {
+    botEngine.resetHistory();
+    setTrades([]);
+    api.getAnalytics().then(setAnalytics).catch(() => {});
+  };
+
+  const handleUpdateRisk = (botId: string, settings: {
+    baseStake?: number;
+    martingaleMultiplier?: number;
+    takeProfit?: number;
+    stopLoss?: number;
+  }) => {
+    if (!botId) return;
+    botEngine.updateRiskSettings(botId, settings);
+    setBots(prev => prev.map(b => {
+      if (b.id === botId) {
+        return {
+          ...b,
+          risk: {
+            ...b.risk,
+            stakeAmount: settings.baseStake ?? b.risk.stakeAmount,
+            martingaleMultiplier: settings.martingaleMultiplier ?? b.risk.martingaleMultiplier,
+            takeProfit: settings.takeProfit ?? b.risk.takeProfit,
+            stopLoss: settings.stopLoss ?? b.risk.stopLoss
+          }
+        };
+      }
+      return b;
+    }));
+  };
+
   const isAnyBotRunning = bots.some(b => b.status === 'RUNNING');
 
   return (
@@ -518,15 +549,16 @@ export default observer(function App() {
               isRunning={isAnyBotRunning}
             />
 
-            {/* Recent Trades Table */}
+            {/* Recent Trades Table with Reset Button */}
             <RecentTradesSection
               trades={trades}
+              onResetHistory={handleResetHistory}
             />
           </div>
 
           {/* Right Column (4 / 12 width) */}
           <div className="xl:col-span-4 space-y-4">
-            {/* Active Bot Panel with Live Trading, Pause, Run, Stop */}
+            {/* Active Bot Panel with Live Trading, Pause, Run / Red Stop Bot, and Martingale/TP/SL Inputs */}
             <ActiveBotPanel
               bot={activeBot}
               onPause={handlePause}
@@ -534,6 +566,9 @@ export default observer(function App() {
               onStop={handleStop}
               onEditSchedule={() => setIsWizardOpen(true)}
               onQuickRun={handleQuickRun}
+              isRunningAny={isAnyBotRunning}
+              onUpdateRisk={(settings) => handleUpdateRisk(activeBot?.id || '', settings)}
+              onOpenAccountModal={() => setIsAccountModalOpen(true)}
             />
 
             {/* Live Cloud Worker Execution Terminal */}
@@ -551,7 +586,11 @@ export default observer(function App() {
           <h3 className="text-xs font-bold text-white uppercase tracking-wider">
             Trade History & Cloud Server Health
           </h3>
-          <TradeHistoryTable trades={trades} bots={bots} />
+          <TradeHistoryTable
+            trades={trades}
+            bots={bots}
+            onResetHistory={handleResetHistory}
+          />
           <ServerHealthMonitor
             status={workerStatus}
             runningBots={bots.filter(b => b.status === 'RUNNING')}

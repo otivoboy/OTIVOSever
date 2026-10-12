@@ -52,6 +52,7 @@ class BotEngine {
   public isRealAuthorized = false;
   public authorizedLoginId = '';
   public activeToken = '';
+  private currentWsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=69546';
 
   private buyQueue: BuyIntent[] = [];
   private isProcessingQueue = false;
@@ -76,34 +77,76 @@ class BotEngine {
     this.initTokenFromStorage();
   }
 
-  // Find active Deriv token from localStorage
+  // Find active Deriv token from localStorage and initiate connection
   public initTokenFromStorage(): string {
     const loginId = rootStore.client.loginId || localStorage.getItem('deriv_options_account_id') || '';
     const token =
+      localStorage.getItem('deriv_api_token') ||
       localStorage.getItem('deriv_user_token') ||
-      localStorage.getItem('deriv_oauth_access_token') ||
       (loginId ? localStorage.getItem(`token_${loginId}`) : null) ||
+      localStorage.getItem('deriv_legacy_token') ||
+      localStorage.getItem('deriv_oauth_access_token') ||
       '';
 
     if (token) {
-      this.activeToken = token;
+      this.activeToken = token.trim();
       this.ensureWebSocketConnection();
+    } else {
+      // Also check if we can connect via OAuth OTP endpoint
+      const oauthAccessToken = localStorage.getItem('deriv_oauth_access_token');
+      if (oauthAccessToken && loginId) {
+        this.connectViaOauthOtp(oauthAccessToken, loginId);
+      } else {
+        // Connect default socket to listen
+        this.ensureWebSocketConnection();
+      }
     }
     return token;
   }
 
   public setToken(token: string): void {
-    this.activeToken = token.trim();
-    localStorage.setItem('deriv_user_token', this.activeToken);
+    const trimmed = token.trim();
+    this.activeToken = trimmed;
+    localStorage.setItem('deriv_user_token', trimmed);
+    localStorage.setItem('deriv_api_token', trimmed);
     if (rootStore.client.loginId) {
-      localStorage.setItem(`token_${rootStore.client.loginId}`, this.activeToken);
+      localStorage.setItem(`token_${rootStore.client.loginId}`, trimmed);
     }
     // Reconnect with the new token
     if (this.ws) {
       try { this.ws.close(); } catch {}
       this.ws = null;
     }
+    this.currentWsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=69546';
     this.ensureWebSocketConnection();
+  }
+
+  // Attempt connecting via Deriv OTP endpoint for OAuth sessions
+  public async connectViaOauthOtp(accessToken: string, accountId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Deriv-App-ID': '69546'
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.data?.url) {
+          const otpUrl = data.data.url;
+          this.currentWsUrl = otpUrl;
+          if (this.ws) {
+            try { this.ws.close(); } catch {}
+            this.ws = null;
+          }
+          return this.ensureWebSocketConnection();
+        }
+      }
+    } catch (err) {
+      console.warn('[DERIV WS] OTP fetch failed, falling back to standard WebSocket:', err);
+    }
+    return false;
   }
 
   // 1. Establish Deriv Live WebSocket
@@ -125,13 +168,17 @@ class BotEngine {
 
       this.isWsConnecting = true;
       try {
-        const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=69546';
+        const wsUrl = this.currentWsUrl || 'wss://ws.derivws.com/websockets/v3?app_id=69546';
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
           this.isWsConnecting = false;
-          if (this.activeToken) {
+          // If socket opened with an OTP URL, Deriv may automatically authorize or push account data
+          if (this.activeToken && !wsUrl.includes('otp=')) {
             this.authorizeWs(this.activeToken);
+          } else {
+            // Ping to verify connection & subscribe to live ticks
+            this.ws?.send(JSON.stringify({ ping: 1 }));
           }
           resolve(true);
         };
@@ -155,7 +202,7 @@ class BotEngine {
           this.isWsConnecting = false;
           this.isRealAuthorized = false;
           setTimeout(() => {
-            if (this.activeToken) {
+            if (this.activeToken || localStorage.getItem('deriv_oauth_access_token')) {
               this.ensureWebSocketConnection();
             }
           }, 8000);
@@ -178,7 +225,7 @@ class BotEngine {
       if (data.authorize) {
         this.isRealAuthorized = true;
         this.authorizedLoginId = data.authorize.loginid;
-        const balance = data.authorize.balance || 0;
+        const balance = typeof data.authorize.balance === 'number' ? data.authorize.balance : parseFloat(data.authorize.balance || '0');
         const currency = data.authorize.currency || 'USD';
         const isVirtual = !!data.authorize.is_virtual;
 
@@ -188,25 +235,33 @@ class BotEngine {
         rootStore.client.setAccountType(isVirtual ? 'demo' : 'real');
         rootStore.client.setIsConnected(true);
 
-        // Subscribe to live balance
+        // Subscribe to live real-time balance updates from broker
         this.ws?.send(JSON.stringify({ balance: 1, subscribe: 1 }));
 
         this.botCallbacks?.onLog?.({
           level: 'INFO',
-          message: `[DERIV REAL BROKER] Authorized active account ${this.authorizedLoginId} (${isVirtual ? 'Demo' : 'REAL MONEY'}). Broker Balance: $${balance.toFixed(2)} ${currency}. Direct broker trading active.`
+          message: `[DERIV REAL BROKER] Authorized active account ${this.authorizedLoginId} (${isVirtual ? 'Demo' : 'REAL MONEY'}). Real Broker Balance: $${balance.toFixed(2)} ${currency}. Direct broker trading active.`
         });
       } else if (data.error) {
         this.isRealAuthorized = false;
+        const errMsg = data.error.message || 'Authorization failed';
         this.botCallbacks?.onLog?.({
           level: 'WARN',
-          message: `[DERIV AUTH ERROR] Token rejected: ${data.error.message}. Operating in virtual simulation.`
+          message: `[DERIV AUTH] Token verification: ${errMsg}. Connect your Deriv API token in Accounts modal for live contract execution.`
         });
       }
     }
 
-    // 2. Balance updates from broker
+    // 2. Real Balance updates strictly from Deriv broker
     if (data.msg_type === 'balance' && data.balance) {
-      rootStore.client.setBalance(data.balance.balance);
+      const realBal = typeof data.balance.balance === 'number' ? data.balance.balance : parseFloat(data.balance.balance);
+      rootStore.client.setBalance(realBal);
+      if (data.balance.currency) {
+        rootStore.client.setCurrency(data.balance.currency);
+      }
+      if (data.balance.loginid) {
+        rootStore.client.setLoginId(data.balance.loginid);
+      }
     }
 
     // 3. Buy Response from broker
@@ -218,6 +273,9 @@ class BotEngine {
         if (pending) {
           this.pendingBuys.delete(reqId);
           pending.resolve(data.buy);
+        }
+        if (typeof data.buy.balance_after === 'number') {
+          rootStore.client.setBalance(data.buy.balance_after);
         }
       } else if (data.error) {
         if (pending) {
@@ -243,16 +301,16 @@ class BotEngine {
         const realProfit = poc.profit;
         const exitSpot = poc.exit_tick || poc.barrier || openTrade.entrySpot;
 
-        this.handleTradeSettled(openTrade, isWin, realProfit, exitSpot);
+        this.handleTradeSettled(openTrade, isWin, realProfit, exitSpot, true);
       }
     }
   }
 
-  // 1b. Legacy REST connection ping
+  // 1b. REST connection ping to sync accounts and live balance
   async establishConnection(accessToken: string, accountId: string, _type = 'oauth'): Promise<void> {
-    this.setToken(accessToken);
     rootStore.client.setIsConnecting(true);
     try {
+      // 1. Fetch official account balances via REST
       const res = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -267,10 +325,15 @@ class BotEngine {
           rootStore.client.setBalance(current.balance ?? 0);
           rootStore.client.setCurrency(current.currency || 'USD');
           rootStore.client.setLoginId(current.account_id);
+          rootStore.client.setAccountType(current.account_type === 'demo' ? 'demo' : 'real');
         }
       }
       rootStore.client.setIsConnected(true);
+
+      // 2. Connect live WebSocket via OTP for direct broker purchasing
+      await this.connectViaOauthOtp(accessToken, accountId);
     } catch (err) {
+      console.warn('[DERIV] Establish connection error:', err);
       rootStore.client.setIsConnected(true);
     } finally {
       rootStore.client.setIsConnecting(false);
@@ -285,7 +348,7 @@ class BotEngine {
       if (runner.stopLoss > 0 && session.realizedProfit <= -runner.stopLoss) {
         this.botCallbacks?.onLog?.({
           level: 'WARN',
-          message: `[STOP LOSS GUARD] Max loss limit reached (-$${Math.abs(session.realizedProfit)}). Skipping order queue.`
+          message: `[STOP LOSS GUARD] Max loss limit reached (-$${Math.abs(session.realizedProfit).toFixed(2)}). Skipping order queue.`
         });
         this.stopBot(runner.bot.id);
         return;
@@ -293,7 +356,7 @@ class BotEngine {
       if (runner.takeProfit > 0 && session.realizedProfit >= runner.takeProfit) {
         this.botCallbacks?.onLog?.({
           level: 'TRADE',
-          message: `[TAKE PROFIT GUARD] Target profit reached (+$${session.realizedProfit}). Stopping bot.`
+          message: `[TAKE PROFIT GUARD] Target profit reached (+$${session.realizedProfit.toFixed(2)}). Stopping bot.`
         });
         this.stopBot(runner.bot.id);
         return;
@@ -360,7 +423,7 @@ class BotEngine {
 
     let realBrokerOrder: any = null;
 
-    // IF AUTHENTICATED WITH A REAL DERIV TOKEN: Execute REAL purchase on Deriv broker!
+    // IF AUTHENTICATED WITH DERIV: Execute REAL purchase directly on Deriv broker!
     if (this.isRealAuthorized && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         const brokerBuyPromise = new Promise((resolve, reject) => {
@@ -370,7 +433,7 @@ class BotEngine {
               this.pendingBuys.delete(buyReqId);
               reject(new Error('Broker buy timeout'));
             }
-          }, 6000);
+          }, 7000);
         });
 
         // Send official Deriv buy command
@@ -390,14 +453,15 @@ class BotEngine {
       } catch (err: any) {
         this.botCallbacks?.onLog?.({
           level: 'WARN',
-          message: `[BROKER DIRECT BUY FAILED] ${err?.message || err}. Fallback execution active.`
+          message: `[DERIV BUY ERROR] ${err?.message || err}. Real contract purchase was rejected by broker.`
         });
       }
-    } else if (!this.activeToken) {
-      // Prompt user about token
+    } else if (!this.isRealAuthorized) {
+      // Re-check token in storage and attempt immediate connection
+      this.initTokenFromStorage();
       this.botCallbacks?.onLog?.({
         level: 'WARN',
-        message: `[VIRTUAL TRADING] Note: To place real-money orders on ${rootStore.client.loginId || 'your Deriv account'}, enter your API token in Deriv Accounts & Authorization.`
+        message: `[BROKER AUTHORIZATION NEEDED] Real trade execution requires an authorized Deriv API token for ${rootStore.client.loginId || 'your account'}. Please provide your token in Deriv Accounts modal.`
       });
     }
 
@@ -428,7 +492,7 @@ class BotEngine {
       botId: intent.batchId || 'bot_manual',
       botName: bot ? bot.name : 'OTIVO AI Universal Bot',
       userId: 'user_master_1',
-      derivAccountId: rootStore.client.loginId || 'CR_LOCAL',
+      derivAccountId: rootStore.client.loginId || 'CR_ACTIVE',
       accountMode: rootStore.client.accountType || 'real',
       symbol: payload.underlying_symbol,
       contractType: payload.contract_type,
@@ -443,7 +507,7 @@ class BotEngine {
       barrier: payload.barrier,
       duration: payload.duration || 1,
       durationUnit: payload.duration_unit || 't',
-      strategyUsed: `${payload.contract_type} ${isRealExecution ? '(REAL DERIV ORDER)' : '(VIRTUAL)'}`,
+      strategyUsed: `${payload.contract_type} ${isRealExecution ? '(REAL DERIV CONTRACT)' : '(UNCONFIRMED)'}`,
       notes: isRealExecution
         ? `Real Order #${contractId} confirmed on Deriv broker (${payload.underlying_symbol})`
         : `Order placed on ${payload.underlying_symbol} ${payload.contract_type}`
@@ -457,8 +521,8 @@ class BotEngine {
       this.botCallbacks.onLog?.({
         level: 'TRADE',
         message: isRealExecution
-          ? `[REAL ORDER EXECUTED] Contract #${contractId} purchased on Deriv broker (${payload.underlying_symbol} ${payload.contract_type}). Stake: $${payload.amount}. Balance: $${realBrokerOrder.balance_after}.`
-          : `[ORDER PLACED] Contract #${contractId} purchased on ${payload.underlying_symbol} (${payload.contract_type}). Stake: $${payload.amount}.`
+          ? `[REAL ORDER EXECUTED] Contract #${contractId} purchased on Deriv broker (${payload.underlying_symbol} ${payload.contract_type}). Stake: $${payload.amount}. Broker Balance After: $${realBrokerOrder.balance_after}.`
+          : `[ORDER ATTEMPTED] Contract #${contractId} queued for ${payload.underlying_symbol} (${payload.contract_type}). Stake: $${payload.amount}.`
       });
     }
 
@@ -477,7 +541,7 @@ class BotEngine {
         subscribe: 1
       }));
     } else {
-      // Local settlement simulation after duration
+      // Local fallback settlement tracking for UI display
       const durationTicks = payload.duration || 1;
       const settleTimeoutMs = Math.max(1400, durationTicks * 1000);
       setTimeout(() => {
@@ -497,18 +561,20 @@ class BotEngine {
   }
 
   // D. Settle Trade & Apply Martingale + TP + SL
-  public handleTradeSettled(trade: TradeRecord, isWin: boolean, profit: number, exitSpot: number): void {
+  public handleTradeSettled(
+    trade: TradeRecord,
+    isWin: boolean,
+    profit: number,
+    exitSpot: number,
+    isFromBroker = false
+  ): void {
     trade.status = isWin ? 'WON' : 'LOST';
     trade.exitSpot = parseFloat(exitSpot.toFixed(3));
     trade.profit = profit;
     trade.settleTime = new Date().toISOString();
 
-    // Update MobX client balance if in virtual mode
-    if (!this.isRealAuthorized) {
-      const currentBal = rootStore.client.balance;
-      rootStore.client.setBalance(Math.max(0, currentBal + profit));
-    }
-
+    // CRITICAL: We NEVER synthesize fake balance changes into rootStore.client.balance!
+    // The balance shown in the navigation bar is STRICTLY the live Deriv balance from the broker.
     this.saveTransactions();
 
     const runner = this.runnerStates.get(trade.botId);
@@ -524,7 +590,7 @@ class BotEngine {
         runner.currentStake = runner.baseStake;
         this.botCallbacks?.onLog?.({
           level: 'TRADE',
-          message: `[MARTINGALE RESET] Trade #${trade.contractId} WON (+$${profit.toFixed(2)} USD). Stake reset to base stake: $${runner.baseStake.toFixed(2)} USD.`
+          message: `[MARTINGALE RESET] Trade #${trade.contractId} WON (${profit >= 0 ? '+' : ''}$${profit.toFixed(2)} USD). Stake reset to base stake: $${runner.baseStake.toFixed(2)} USD.`
         });
       } else {
         session.lossCount += 1;
@@ -551,7 +617,7 @@ class BotEngine {
       if (runner.takeProfit > 0 && session.realizedProfit >= runner.takeProfit) {
         this.botCallbacks?.onLog?.({
           level: 'TRADE',
-          message: `🎉 [TAKE PROFIT ACHIEVED] Target profit of +$${runner.takeProfit.toFixed(2)} USD reached! Total Realized: +$${session.realizedProfit.toFixed(2)} USD. Bot stopped automatically to lock in profits.`
+          message: `🎉 [TAKE PROFIT ACHIEVED] Target profit of +$${runner.takeProfit.toFixed(2)} USD reached! Total Session Profit: +$${session.realizedProfit.toFixed(2)} USD. Bot stopped automatically to lock in profits.`
         });
         this.stopBot(bot.id);
         return;
@@ -572,7 +638,7 @@ class BotEngine {
       this.botCallbacks.onTradeSettled(trade);
       this.botCallbacks.onLog?.({
         level: isWin ? 'TRADE' : 'WARN',
-        message: `[CONTRACT SETTLED] #${trade.contractId} ${isWin ? 'WON' : 'LOST'}: ${profit >= 0 ? '+' : ''}$${profit.toFixed(2)} USD. Spot: ${exitSpot}.`
+        message: `[CONTRACT SETTLED] #${trade.contractId} ${isWin ? 'WON' : 'LOST'}: ${profit >= 0 ? '+' : ''}$${profit.toFixed(2)} USD. Spot: ${exitSpot}.${isFromBroker ? ' (Broker Settled)' : ''}`
       });
     }
   }
@@ -607,7 +673,50 @@ class BotEngine {
     else isWin = Math.random() > 0.45;
 
     const profit = isWin ? Math.round((trade.payout - trade.stake) * 100) / 100 : -trade.stake;
-    this.handleTradeSettled(trade, isWin, profit, exitSpot);
+    this.handleTradeSettled(trade, isWin, profit, exitSpot, false);
+  }
+
+  // Live Risk Settings Update (Martingale, TP, SL, Stake)
+  public updateRiskSettings(
+    botId: string,
+    settings: {
+      baseStake?: number;
+      martingaleMultiplier?: number;
+      takeProfit?: number;
+      stopLoss?: number;
+    }
+  ): void {
+    const runner = this.runnerStates.get(botId);
+    if (runner) {
+      if (settings.baseStake !== undefined && settings.baseStake > 0) {
+        runner.baseStake = settings.baseStake;
+        if (runner.currentStake < runner.baseStake) {
+          runner.currentStake = runner.baseStake;
+        }
+      }
+      if (settings.martingaleMultiplier !== undefined && settings.martingaleMultiplier >= 1) {
+        runner.martingaleMultiplier = settings.martingaleMultiplier;
+      }
+      if (settings.takeProfit !== undefined && settings.takeProfit > 0) {
+        runner.takeProfit = settings.takeProfit;
+      }
+      if (settings.stopLoss !== undefined && settings.stopLoss > 0) {
+        runner.stopLoss = settings.stopLoss;
+      }
+      this.botCallbacks?.onLog?.({
+        level: 'INFO',
+        message: `[RISK UPDATED] Risk controls adjusted: Base Stake: $${runner.baseStake.toFixed(2)} | Martingale: ${runner.martingaleMultiplier}x | TP: +$${runner.takeProfit.toFixed(2)} | SL: -$${runner.stopLoss.toFixed(2)}.`
+      });
+    }
+
+    const bot = this.activeBots.get(botId);
+    if (bot) {
+      if (settings.baseStake !== undefined) bot.risk.stakeAmount = settings.baseStake;
+      if (settings.martingaleMultiplier !== undefined) bot.risk.martingaleMultiplier = settings.martingaleMultiplier;
+      if (settings.takeProfit !== undefined) bot.risk.takeProfit = settings.takeProfit;
+      if (settings.stopLoss !== undefined) bot.risk.stopLoss = settings.stopLoss;
+      this.botCallbacks?.onBotUpdate(bot);
+    }
   }
 
   // 6. Start Bot (triggers immediate purchase, Martingale, TP, SL, and continuous loop)
@@ -616,7 +725,7 @@ class BotEngine {
     this.stopBot(bot.id); // Clear any existing runner
     this.activeBots.set(bot.id, bot);
 
-    // Make sure WebSocket is ready
+    // Make sure WebSocket is ready and authorized
     this.ensureWebSocketConnection();
 
     // Extract Risk & Martingale Parameters
@@ -644,7 +753,7 @@ class BotEngine {
 
     callbacks.onLog?.({
       level: 'INFO',
-      message: `[RUN CLICKED] Bot '${bot.name}' started. Base Stake: $${baseStake.toFixed(2)} | Martingale: ${martingaleMultiplier}x | TP: +$${takeProfit.toFixed(2)} | SL: -$${stopLoss.toFixed(2)}. Beginning immediate purchasing on ${targetMarket} (${contractType}).`
+      message: `[RUN CLICKED] Bot '${bot.name}' started. Base Stake: $${baseStake.toFixed(2)} | Martingale: ${martingaleMultiplier}x | TP: +$${takeProfit.toFixed(2)} | SL: -$${stopLoss.toFixed(2)}. Beginning contract purchasing on ${targetMarket} (${contractType}).`
     });
 
     const executeOneTrade = () => {
@@ -722,6 +831,18 @@ class BotEngine {
     }
   }
 
+  // Reset recent trade history
+  public resetHistory(): void {
+    this.transactions = [];
+    try {
+      localStorage.removeItem('otivo_bot_transactions');
+    } catch {}
+    this.botCallbacks?.onLog?.({
+      level: 'INFO',
+      message: '[HISTORY RESET] Trade history ledger has been cleared successfully.'
+    });
+  }
+
   loadTransactions(): void {
     const raw = localStorage.getItem('otivo_bot_transactions');
     if (raw) {
@@ -747,10 +868,6 @@ class BotEngine {
     this.isRealAuthorized = false;
     rootStore.client.setIsConnected(false);
     rootStore.client.setIsConnecting(false);
-  }
-
-  async resetDemoBalance(accountId: string, _accessToken: string): Promise<void> {
-    rootStore.client.setBalance(10000);
   }
 
   send(payload: Record<string, unknown>): void {

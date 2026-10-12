@@ -42,15 +42,24 @@ export default observer(function Layout({ children }: LayoutProps) {
   const isConnecting = rootStore.client.isConnecting;
   const setIsConnected = (v: boolean) => rootStore.client.setIsConnected(v);
   const setIsConnecting = (v: boolean) => rootStore.client.setIsConnecting(v);
-  const [isSessionActive, setIsSessionActive] = useState(!!localStorage.getItem('deriv_oauth_access_token'));
+  const [isSessionActive, setIsSessionActive] = useState(() => {
+    return (
+      !!localStorage.getItem('deriv_oauth_access_token') ||
+      !!localStorage.getItem('deriv_user_token') ||
+      !!localStorage.getItem('deriv_api_token')
+    );
+  });
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(() => {
-    const token = localStorage.getItem('deriv_oauth_access_token');
+    const token =
+      localStorage.getItem('deriv_oauth_access_token') ||
+      localStorage.getItem('deriv_user_token') ||
+      localStorage.getItem('deriv_api_token');
     const accId = localStorage.getItem('deriv_options_account_id');
-    const accType = localStorage.getItem('deriv_active_account_type') || 'demo';
+    const accType = localStorage.getItem('deriv_active_account_type') || 'real';
     const balance = localStorage.getItem('deriv_cached_balance') || '0';
     const currency = localStorage.getItem('deriv_cached_currency') || 'USD';
     
-    if (token && accId) {
+    if (accId) {
       return {
         balance,
         currency,
@@ -99,17 +108,26 @@ export default observer(function Layout({ children }: LayoutProps) {
   const connectAccount = async (accId: string, type: string) => {
     setError(null);
     try {
-      const at = localStorage.getItem('deriv_oauth_access_token');
-      if (!at) {
-        disconnectFromDeriv();
-        return;
-      }
+      const at =
+        localStorage.getItem('deriv_oauth_access_token') ||
+        localStorage.getItem('deriv_user_token') ||
+        localStorage.getItem('deriv_api_token');
+
       localStorage.setItem('deriv_options_account_id', accId);
       localStorage.setItem('deriv_active_account_type', type);
       rootStore.client.setLoginId(accId);
       setIsConnecting(true);
       rootStore.client.setIsConnecting(true);
-      await botEngine.establishConnection(at, accId, 'oauth');
+
+      if (at) {
+        if (localStorage.getItem('deriv_oauth_access_token')) {
+          await botEngine.establishConnection(at, accId, 'oauth');
+        } else {
+          botEngine.setToken(at);
+        }
+      } else {
+        botEngine.ensureWebSocketConnection();
+      }
       
       setIsSessionActive(true);
       setAccountInfo({
@@ -124,8 +142,6 @@ export default observer(function Layout({ children }: LayoutProps) {
       if (
         msg.includes('401') || 
         msg.includes('403') || 
-        msg.toLowerCase().includes('unauthorized') || 
-        msg.toLowerCase().includes('token') || 
         msg.toLowerCase().includes('expired')
       ) {
         disconnectFromDeriv();

@@ -327,21 +327,32 @@ export const ContractsSection: React.FC<ContractsSectionProps> = ({
                 </label>
                 <span className="text-[10px] font-mono text-emerald-400 font-bold">{martingaleMultiplier}x</span>
               </div>
-              <div className="flex gap-1">
-                {[1.0, 1.5, 2.0, 2.5].map((multiplier) => (
-                  <button
-                    key={multiplier}
-                    type="button"
-                    onClick={() => setMartingaleMultiplier(multiplier)}
-                    className={`flex-1 py-1 text-[10px] font-mono font-bold rounded cursor-pointer transition-all ${
-                      martingaleMultiplier === multiplier
-                        ? 'bg-emerald-500 text-[#071118]'
-                        : 'bg-[#0d1c26] text-neutral-300 hover:bg-[#142a3a] border border-[#162734]'
-                    }`}
-                  >
-                    {multiplier === 1.0 ? 'Off' : `${multiplier}x`}
-                  </button>
-                ))}
+              <div className="space-y-1">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="1.0"
+                  max="10.0"
+                  value={martingaleMultiplier}
+                  onChange={(e) => setMartingaleMultiplier(Math.max(1.0, parseFloat(e.target.value) || 1.0))}
+                  className="w-full bg-[#071118] border border-[#142634] rounded-lg px-2 py-1 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500 font-bold"
+                />
+                <div className="flex gap-1">
+                  {[1.0, 1.5, 2.0, 2.5].map((multiplier) => (
+                    <button
+                      key={multiplier}
+                      type="button"
+                      onClick={() => setMartingaleMultiplier(multiplier)}
+                      className={`flex-1 py-0.5 text-[9px] font-mono font-bold rounded cursor-pointer transition-all ${
+                        martingaleMultiplier === multiplier
+                          ? 'bg-emerald-500 text-[#071118]'
+                          : 'bg-[#0d1c26] text-neutral-300 hover:bg-[#142a3a] border border-[#162734]'
+                      }`}
+                    >
+                      {multiplier === 1.0 ? 'Off' : `${multiplier}x`}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

@@ -5,9 +5,10 @@ import { CheckCircle, Clock, XCircle, Search } from 'lucide-react';
 interface TradeHistoryTableProps {
   trades: TradeRecord[];
   bots: BotRecord[];
+  onResetHistory?: () => void;
 }
 
-export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = ({ trades, bots }) => {
+export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = ({ trades, bots, onResetHistory }) => {
   const [selectedBotId, setSelectedBotId] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -54,6 +55,15 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = ({ trades, bo
             <option value="LOST">Settled Lost</option>
             <option value="OPEN">Open Tracking</option>
           </select>
+          {trades.length > 0 && onResetHistory && (
+            <button
+              type="button"
+              onClick={onResetHistory}
+              className="text-xs font-semibold text-rose-400 hover:text-rose-300 py-1.5 px-3 rounded-lg bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition-colors cursor-pointer"
+            >
+              Reset History Ledger
+            </button>
+          )}
         </div>
 
         {/* Search */}
