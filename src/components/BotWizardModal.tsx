@@ -80,6 +80,14 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
   const [runUntilStopped, setRunUntilStopped] = useState(true);
   const [timezone, setTimezone] = useState('UTC');
 
+  React.useEffect(() => {
+    if (isOpen && accounts.length > 0) {
+      const active = accounts.find(a => a.isActive) || accounts[0];
+      setSelectedAccountId(active.id);
+      setAccountMode(active.accountType);
+    }
+  }, [isOpen, accounts]);
+
   if (!isOpen) return null;
 
   const standard8Markets = markets.filter(m => m.isStandard8);
@@ -246,7 +254,7 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
                 >
                   {accounts.map(acc => (
                     <option key={acc.id} value={acc.id}>
-                      {acc.accountNumber} ({acc.accountType.toUpperCase()} - ${acc.balance} {acc.currency})
+                      {acc.accountNumber} ({acc.accountType.toUpperCase()} - ${acc.balance} {acc.currency}){acc.isActive ? ' [ACTIVE]' : ''}
                     </option>
                   ))}
                 </select>
@@ -254,12 +262,16 @@ export const BotWizardModal: React.FC<BotWizardModalProps> = ({
               <div className="p-3 bg-neutral-950/60 rounded-xl border border-neutral-800 flex items-center justify-between">
                 <div>
                   <div className="text-xs font-semibold text-white">Execution Mode</div>
-                  <div className="text-[11px] text-[#00e676] font-medium">
-                    Real Production Deriv Trading
+                  <div className={`text-[11px] font-medium ${accountMode === 'real' ? 'text-[#00e676]' : 'text-amber-300'}`}>
+                    {accountMode === 'real' ? 'Real Production Deriv Trading' : 'Virtual / Demo Trading'}
                   </div>
                 </div>
-                <div className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#00e676]/15 text-[#00e676] border border-[#00e676]/30">
-                  REAL ACCOUNT
+                <div className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${
+                  accountMode === 'real'
+                    ? 'bg-[#00e676]/15 text-[#00e676] border-[#00e676]/30'
+                    : 'bg-amber-400/15 text-amber-300 border-amber-400/30'
+                }`}>
+                  {accountMode === 'real' ? 'REAL ACCOUNT' : 'DEMO ACCOUNT'}
                 </div>
               </div>
             </div>

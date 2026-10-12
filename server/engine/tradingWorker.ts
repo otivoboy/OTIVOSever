@@ -104,29 +104,37 @@ export class PersistentTradingWorker extends EventEmitter {
 
     let account = storage.getDerivAccountById(bot.derivAccountId);
     if (!account) {
-      // Create/assign active account if available
-      const accounts = storage.getDerivAccounts();
-      if (accounts.length > 0) {
-        account = accounts.find(a => a.isActive) || accounts[0];
-        bot.derivAccountId = account.id;
+      // Instead of just finding any account or auto-generating demo fallback, get the ACTIVE one
+      const accounts = storage.getDerivAccounts(bot.userId);
+      const activeAccount = accounts.find(a => a.isActive);
+
+      if (activeAccount) {
+        account = activeAccount;
+        bot.derivAccountId = activeAccount.id;
       } else {
-        account = storage.saveDerivAccount({
-          id: `acc_auto_${Date.now()}`,
-          userId: bot.userId,
-          accountNumber: 'CR' + Math.floor(1000000 + Math.random() * 9000000),
-          accountType: bot.accountMode || 'real',
-          currency: 'USD',
-          balance: 10000.0,
-          tokenMasked: 'session_token',
-          tokenEncrypted: 'session_active',
-          isActive: true,
-          connectedAt: new Date().toISOString(),
-          lastVerifiedAt: new Date().toISOString(),
-          status: 'CONNECTED'
-        });
-        bot.derivAccountId = account.id;
+        throw new Error(
+          `No active Deriv account found. Please connect a real account in the Navigation before deploying.`
+        );
       }
     }
+
+    // Validate the account mode matches expectation
+    if (bot.accountMode && account.accountType !== bot.accountMode) {
+      // Check if there is an active account that matches the bot's expected mode
+      const accounts = storage.getDerivAccounts(bot.userId);
+      const activeAccount = accounts.find(a => a.isActive);
+      if (activeAccount && activeAccount.accountType === bot.accountMode) {
+        account = activeAccount;
+        bot.derivAccountId = activeAccount.id;
+      } else {
+        throw new Error(
+          `Account mismatch: Bot expects ${bot.accountMode} but account is ${account.accountType}`
+        );
+      }
+    }
+
+    // Ensure bot's accountMode is synchronized with the selected account
+    bot.accountMode = account.accountType;
 
     // Check schedule
     if (bot.schedule.type === 'SCHEDULED_WINDOW' && bot.schedule.startDateTime) {
@@ -330,8 +338,17 @@ export class PersistentTradingWorker extends EventEmitter {
       return;
     }
 
-    // 2. Centralized Risk Check
+    // 2. Centralized Risk Check & Account Verification
     const account = storage.getDerivAccountById(bot.derivAccountId);
+    if (!account) {
+      await this.stopBot(bot.id, 'Connected account not found. Please connect your Deriv account.');
+      return;
+    }
+    if (bot.accountMode && account.accountType !== bot.accountMode) {
+      await this.stopBot(bot.id, `Account mismatch: Bot expects ${bot.accountMode} but connected account is ${account.accountType}`);
+      return;
+    }
+
     const riskCheck = RiskManager.evaluateRisk(bot, account);
     if (!riskCheck.allowed) {
       if (riskCheck.triggerType && riskCheck.triggerType !== 'COOLDOWN') {

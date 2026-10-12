@@ -150,31 +150,47 @@ apiRouter.get('/bots', (_req: Request, res: Response) => {
 apiRouter.post('/bots', (req: Request, res: Response) => {
   const data = req.body;
   if (!data.name || !data.derivAccountId || !data.selectedMarkets || data.selectedMarkets.length === 0) {
-    return res.status(400).json({ success: false, error: 'Name, account, and markets are required' });
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Name, account, and markets are required' 
+    });
   }
 
   let account = storage.getDerivAccountById(data.derivAccountId);
   if (!account) {
-    const existingAccounts = storage.getDerivAccounts();
-    if (existingAccounts.length > 0) {
-      account = existingAccounts.find(a => a.isActive) || existingAccounts[0];
+    const existingAccounts = storage.getDerivAccounts(DEFAULT_USER_ID);
+    const activeAccount = existingAccounts.find(a => a.isActive);
+    if (activeAccount) {
+      account = activeAccount;
+      data.derivAccountId = activeAccount.id;
     } else {
-      account = storage.saveDerivAccount({
-        id: data.derivAccountId || `deriv_acc_${Date.now()}`,
-        userId: DEFAULT_USER_ID,
-        accountNumber: 'CR' + Math.floor(1000000 + Math.random() * 9000000),
-        accountType: data.accountMode || 'real',
-        currency: 'USD',
-        balance: 10000,
-        tokenMasked: 'oauth_session',
-        tokenEncrypted: 'session_active',
-        isActive: true,
-        connectedAt: new Date().toISOString(),
-        lastVerifiedAt: new Date().toISOString(),
-        status: 'CONNECTED'
+      return res.status(400).json({
+        success: false,
+        error: `Account ${data.derivAccountId} not found. Please connect an account first.`
       });
     }
   }
+
+  // Ensure the account is the one selected in navigation
+  const isActive = account.isActive;
+  const accountType = account.accountType;
+
+  // Validate account mode matches expectation if specified
+  if (data.accountMode && account.accountType !== data.accountMode) {
+    const existingAccounts = storage.getDerivAccounts(DEFAULT_USER_ID);
+    const activeAccount = existingAccounts.find(a => a.isActive);
+    if (activeAccount && activeAccount.accountType === data.accountMode) {
+      account = activeAccount;
+      data.derivAccountId = activeAccount.id;
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: `Account mismatch: Selected account is ${account.accountType} (${account.accountNumber}), but bot expects ${data.accountMode}.`
+      });
+    }
+  }
+
+  console.log(`Creating bot on ${account.accountType} account: ${account.accountNumber} (Active: ${account.isActive})`);
 
   const newBot: BotRecord = {
     id: `bot_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -208,7 +224,7 @@ apiRouter.post('/bots', (req: Request, res: Response) => {
     botId: newBot.id,
     userId: DEFAULT_USER_ID,
     level: 'INFO',
-    message: `Bot '${newBot.name}' configuration created and validated.`
+    message: `Bot '${newBot.name}' configuration created on ${account.accountType.toUpperCase()} account (${account.accountNumber}).`
   });
 
   res.json({ success: true, bot: newBot });

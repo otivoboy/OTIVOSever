@@ -113,6 +113,7 @@ export default observer(function App() {
         rootStore.client.setLoginId(primary.accountNumber);
         rootStore.client.setBalance(primary.balance);
         rootStore.client.setCurrency(primary.currency);
+        rootStore.client.setAccountType(primary.accountType);
         rootStore.client.setIsConnected(true);
       }
     } catch (err) {
@@ -409,10 +410,10 @@ export default observer(function App() {
       const localBot: BotRecord = {
         id: `bot_${Date.now()}`,
         userId: 'user_master_1',
-        derivAccountId: 'acc_local_1',
+        derivAccountId: activeAcc?.id || 'acc_local_1',
         name: botName,
         description: `Automated trading on ${params.market}`,
-        accountMode: 'real',
+        accountMode: activeAcc?.accountType || 'real',
         selectedMarkets: [params.market],
         selectedContractTypes: params.subtypes,
         strategy: botData.strategy as any,
@@ -457,6 +458,7 @@ export default observer(function App() {
       rootStore.client.setLoginId(current.accountNumber);
       rootStore.client.setBalance(current.balance);
       rootStore.client.setCurrency(current.currency);
+      rootStore.client.setAccountType(current.accountType);
       botEngine.initTokenFromStorage();
     }
   };
@@ -473,6 +475,7 @@ export default observer(function App() {
     rootStore.client.setLoginId(created.accountNumber);
     rootStore.client.setBalance(created.balance);
     rootStore.client.setCurrency(created.currency);
+    rootStore.client.setAccountType(created.accountType);
     rootStore.client.setIsConnected(true);
   };
 
