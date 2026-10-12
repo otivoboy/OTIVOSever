@@ -4,6 +4,7 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  NPM_FLAGS = "--legacy-peer-deps"
 
 [[redirects]]
   # React Router SPA catch-all fallback - prevents 404s on subpaths

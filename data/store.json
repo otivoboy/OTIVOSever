@@ -12,6 +12,42 @@
   "trades": [],
   "logs": [
     {
+      "id": "log_1791787005078_mqybu",
+      "timestamp": "2026-10-12T06:36:45.078Z",
+      "level": "INFO",
+      "message": "[SCHEDULER] Persistent cloud schedule engine started. Independent UTC clock active."
+    },
+    {
+      "id": "log_1791787005077_jp09f",
+      "timestamp": "2026-10-12T06:36:45.077Z",
+      "level": "INFO",
+      "message": "[RECOVERY] Recovering engine state: found 0 bots in active state."
+    },
+    {
+      "id": "log_1791786993645_p2scr",
+      "timestamp": "2026-10-12T06:36:33.645Z",
+      "level": "INFO",
+      "message": "[SCHEDULER] Persistent cloud schedule engine started. Independent UTC clock active."
+    },
+    {
+      "id": "log_1791786993645_9x3ap",
+      "timestamp": "2026-10-12T06:36:33.645Z",
+      "level": "INFO",
+      "message": "[RECOVERY] Recovering engine state: found 0 bots in active state."
+    },
+    {
+      "id": "log_1791786208711_414nv",
+      "timestamp": "2026-10-12T06:23:28.711Z",
+      "level": "INFO",
+      "message": "[SCHEDULER] Persistent cloud schedule engine started. Independent UTC clock active."
+    },
+    {
+      "id": "log_1791786208710_h61wy",
+      "timestamp": "2026-10-12T06:23:28.710Z",
+      "level": "INFO",
+      "message": "[RECOVERY] Recovering engine state: found 0 bots in active state."
+    },
+    {
       "id": "log_1791757642726_e3f96",
       "timestamp": "2026-10-11T22:27:22.726Z",
       "level": "INFO",
@@ -73,6 +109,45 @@
       "pid": 221,
       "startedAt": "2026-10-11T22:42:10.962Z",
       "lastHeartbeat": "2026-10-11T22:42:10.962Z",
+      "status": "HEALTHY",
+      "activeBotsCount": 0,
+      "subscribedSymbols": [],
+      "memoryUsageMb": 65,
+      "databaseConnected": true,
+      "derivWsConnected": false
+    },
+    {
+      "instanceId": "worker_50_48rip",
+      "hostname": "otivo-cloud-node-01",
+      "pid": 50,
+      "startedAt": "2026-10-12T06:36:31.915Z",
+      "lastHeartbeat": "2026-10-12T06:36:31.915Z",
+      "status": "HEALTHY",
+      "activeBotsCount": 0,
+      "subscribedSymbols": [],
+      "memoryUsageMb": 70,
+      "databaseConnected": true,
+      "derivWsConnected": false
+    },
+    {
+      "instanceId": "worker_163_p0ejt",
+      "hostname": "otivo-cloud-node-01",
+      "pid": 163,
+      "startedAt": "2026-10-12T06:36:42.645Z",
+      "lastHeartbeat": "2026-10-12T06:36:42.645Z",
+      "status": "HEALTHY",
+      "activeBotsCount": 0,
+      "subscribedSymbols": [],
+      "memoryUsageMb": 54,
+      "databaseConnected": true,
+      "derivWsConnected": false
+    },
+    {
+      "instanceId": "worker_209_cj2e6",
+      "hostname": "otivo-cloud-node-01",
+      "pid": 209,
+      "startedAt": "2026-10-12T06:43:24.176Z",
+      "lastHeartbeat": "2026-10-12T06:43:24.176Z",
       "status": "HEALTHY",
       "activeBotsCount": 0,
       "subscribedSymbols": [],
